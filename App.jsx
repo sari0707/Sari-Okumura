@@ -6,6 +6,7 @@ import {
   ChevronLeft, ChevronRight, Search, X, AlertCircle, LogOut,
   ShieldCheck, Banknote, Edit3, Eye, EyeOff, ArrowRight, Sparkles
 } from "lucide-react";
+import { supabase } from "./src/supabaseClient.js";
 
 /* ============================================================
    BRAND TOKENS
@@ -30,7 +31,6 @@ const C = {
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap');`;
 
-const uid = (p = "") => p + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 const yen = (n) => "¥" + Math.round(n).toLocaleString("ja-JP");
 const todayStr = () => {
   const d = new Date();
@@ -59,21 +59,6 @@ const deriveOrderStatus = (o) => {
   return "注文受付";
 };
 
-const DEFAULT_PRODUCTS = [
-  {
-    id: "prod_yomogi300",
-    name: "よもぎの環 入浴剤",
-    volume: "300g（約15回分）",
-    description:
-      "11年間よもぎ蒸しサロンで使い続けてきた処方をもとにした、植物系入浴剤です。よもぎ・BANSEIエキス配合。敏感肌のお子様にもお使いいただける、やさしい設計。",
-    generalPrice: 3300,
-    wholesalePrice: 1980,
-    minOrderQty: 3,
-    stock: 48,
-    active: true,
-  },
-];
-
 const DEFAULT_BANK = {
   bankName: "みずほ銀行",
   branchName: "大阪支店",
@@ -84,24 +69,98 @@ const DEFAULT_BANK = {
 };
 
 /* ------------------------------------------------------------
-   Storage helpers (shared demo dataset — everyone using this
-   artifact sees the same salons / products / orders)
+   Supabase row <-> UI model mapping (DB columns are snake_case;
+   the screens below all read/write the original camelCase shape)
 ------------------------------------------------------------ */
-async function loadShared(key, fallback) {
-  try {
-    const res = await window.storage.get(key, true);
-    return res ? JSON.parse(res.value) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-async function saveShared(key, value) {
-  try {
-    await window.storage.set(key, JSON.stringify(value), true);
-  } catch (e) {
-    console.error("storage save failed", key, e);
-  }
-}
+const fmtDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const mapSalon = (r) => ({
+  id: r.id,
+  userId: r.user_id,
+  salonName: r.salon_name,
+  contactName: r.contact_name,
+  email: r.email,
+  phone: r.phone,
+  zip: r.zip || "",
+  address: r.address,
+  instagram: r.instagram || "",
+  salonUrl: r.salon_url || "",
+  desiredProducts: r.desired_products || "",
+  notes: r.notes || "",
+  status: r.status,
+  registeredAt: fmtDate(r.registered_at),
+});
+const mapSalons = (rows) => (rows || []).map(mapSalon);
+
+const mapProduct = (r) => ({
+  id: r.id,
+  name: r.name,
+  volume: r.volume || "",
+  description: r.description || "",
+  generalPrice: Number(r.general_price),
+  wholesalePrice: Number(r.wholesale_price),
+  minOrderQty: r.min_order_qty,
+  stock: r.stock,
+  active: r.active,
+});
+const mapProducts = (rows) => (rows || []).map(mapProduct);
+
+const mapOrder = (r) => ({
+  id: r.id,
+  orderNumber: r.order_number,
+  salonId: r.salon_id,
+  items: r.items,
+  subtotal: Number(r.subtotal),
+  shipping: Number(r.shipping),
+  total: Number(r.total),
+  paymentStatus: r.payment_status,
+  paymentRequested: r.payment_requested,
+  shipStatus: r.ship_status,
+  carrier: r.carrier || "",
+  trackingNumber: r.tracking_number || "",
+  shippedAt: r.shipped_at || "",
+  createdAt: fmtDate(r.created_at),
+});
+const mapOrders = (rows) => (rows || []).map(mapOrder);
+
+const mapBankInfo = (r) =>
+  r
+    ? {
+        bankName: r.bank_name,
+        branchName: r.branch_name,
+        accountType: r.account_type,
+        accountNumber: r.account_number,
+        accountHolder: r.account_holder,
+        deadlineDays: r.deadline_days,
+      }
+    : DEFAULT_BANK;
+
+const productToDb = (patch) => {
+  const dbPatch = {};
+  if ("name" in patch) dbPatch.name = patch.name;
+  if ("volume" in patch) dbPatch.volume = patch.volume;
+  if ("description" in patch) dbPatch.description = patch.description;
+  if ("generalPrice" in patch) dbPatch.general_price = patch.generalPrice;
+  if ("wholesalePrice" in patch) dbPatch.wholesale_price = patch.wholesalePrice;
+  if ("minOrderQty" in patch) dbPatch.min_order_qty = patch.minOrderQty;
+  if ("stock" in patch) dbPatch.stock = patch.stock;
+  if ("active" in patch) dbPatch.active = patch.active;
+  return dbPatch;
+};
+
+const orderPatchToDb = (patch) => {
+  const dbPatch = {};
+  if ("paymentStatus" in patch) dbPatch.payment_status = patch.paymentStatus;
+  if ("shipStatus" in patch) dbPatch.ship_status = patch.shipStatus;
+  if ("shippedAt" in patch) dbPatch.shipped_at = patch.shippedAt;
+  if ("carrier" in patch) dbPatch.carrier = patch.carrier;
+  if ("trackingNumber" in patch) dbPatch.tracking_number = patch.trackingNumber;
+  return dbPatch;
+};
 
 /* ============================================================
    SMALL UI PRIMITIVES
@@ -376,34 +435,56 @@ function SectionTitle({ eyebrow, title, right }) {
 /* ============================================================
    AUTH SCREENS
 ============================================================ */
-function LoginScreen({ salons, onLoginSalon, onLoginAdmin, goRegister }) {
+function LoginScreen({ goRegister }) {
+  const [mode, setMode] = useState("salon"); // "salon" | "admin"
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [adminMode, setAdminMode] = useState(false);
-  const [adminCode, setAdminCode] = useState("");
-  const [showAdminHelp, setShowAdminHelp] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
 
-  const submitSalon = () => {
-    const s = salons.find((x) => x.email.trim().toLowerCase() === email.trim().toLowerCase());
-    if (!s) {
-      setError("登録されたメールアドレスが見つかりません。取扱店登録をお願いいたします。");
-      return;
-    }
-    if (s.status !== "approved") {
-      setError("ご登録ありがとうございます。現在、運営者による承認をお待ちいただいております。");
-      return;
-    }
+  const submitSalon = async () => {
+    if (!email.trim()) return;
+    setSending(true);
     setError("");
-    onLoginSalon(s.id);
+    const { error: err } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setSending(false);
+    if (err) {
+      setError("送信に失敗しました。時間をおいて再度お試しください。");
+      return;
+    }
+    setSent(true);
   };
 
-  const submitAdmin = () => {
-    if (adminCode === "yomogi2026") {
-      onLoginAdmin();
-    } else {
-      setError("運営者コードが正しくありません。");
+  const submitAdmin = async () => {
+    setError("");
+    const { error: err } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+    if (err) {
+      setError("メールアドレスまたはパスワードが正しくありません。");
     }
   };
+
+  if (sent) {
+    return (
+      <div style={{ minHeight: "100vh", background: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <Card style={{ padding: 32, textAlign: "center", maxWidth: 400 }}>
+          <Mail size={32} color={C.forest} style={{ marginBottom: 14 }} />
+          <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 18, marginBottom: 10 }}>
+            ログイン用のメールを送信しました
+          </div>
+          <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8 }}>
+            {email} 宛にログインリンクをお送りしました。メール内のリンクをクリックしてログインを完了してください。
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${C.forestDeep}, ${C.forest} 45%, ${C.ivory} 45%)` }}>
@@ -419,10 +500,10 @@ function LoginScreen({ salons, onLoginSalon, onLoginAdmin, goRegister }) {
 
       <div style={{ maxWidth: 420, margin: "0 auto", padding: "0 20px 40px" }}>
         <Card style={{ padding: 28, boxShadow: "0 10px 30px rgba(27,46,34,0.18)" }}>
-          {!adminMode ? (
+          {mode === "salon" ? (
             <>
               <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
-                ご登録のメールアドレスでログインしてください。ログイン後、取扱店様専用の卸価格でご注文いただけます。
+                ご登録のメールアドレスを入力すると、ログイン用のリンクをお送りします。パスワードは不要です。
               </div>
               <Field label="メールアドレス" required>
                 <Input type="email" placeholder="salon@example.com" value={email}
@@ -433,7 +514,9 @@ function LoginScreen({ salons, onLoginSalon, onLoginAdmin, goRegister }) {
                   <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
                 </div>
               )}
-              <Btn full icon={Lock} onClick={submitSalon}>ログイン</Btn>
+              <Btn full icon={Lock} onClick={submitSalon} disabled={sending}>
+                {sending ? "送信中…" : "ログインリンクを送る"}
+              </Btn>
               <div style={{ textAlign: "center", marginTop: 18 }}>
                 <button onClick={goRegister} style={{ background: "none", border: "none", color: C.forest, fontWeight: 700, fontSize: 13.5, cursor: "pointer", textDecoration: "underline" }}>
                   取扱店登録はこちら
@@ -445,8 +528,11 @@ function LoginScreen({ salons, onLoginSalon, onLoginAdmin, goRegister }) {
               <div style={{ fontSize: 13, fontWeight: 700, color: C.forest, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>
                 <ShieldCheck size={16} /> 運営者ログイン
               </div>
-              <Field label="運営者コード" required>
-                <Input type="password" placeholder="••••••••" value={adminCode} onChange={(e) => setAdminCode(e.target.value)} />
+              <Field label="メールアドレス" required>
+                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              </Field>
+              <Field label="パスワード" required>
+                <Input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
               </Field>
               {error && <div style={{ color: C.clay, fontSize: 12.5, marginBottom: 14 }}>{error}</div>}
               <Btn full variant="gold" icon={ShieldCheck} onClick={submitAdmin}>管理画面へ</Btn>
@@ -455,27 +541,13 @@ function LoginScreen({ salons, onLoginSalon, onLoginAdmin, goRegister }) {
 
           <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 22, paddingTop: 16, textAlign: "center" }}>
             <button
-              onClick={() => { setAdminMode(!adminMode); setError(""); }}
+              onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setError(""); }}
               style={{ background: "none", border: "none", color: C.inkSoft, fontSize: 12, cursor: "pointer" }}
             >
-              {adminMode ? "← サロン用ログインへ戻る" : "運営者の方はこちら"}
+              {mode === "admin" ? "← サロン用ログインへ戻る" : "運営者の方はこちら"}
             </button>
           </div>
         </Card>
-
-        {!adminMode && (
-          <div style={{ marginTop: 16, textAlign: "center" }}>
-            <button onClick={() => setShowAdminHelp(!showAdminHelp)} style={{ background: "none", border: "none", color: C.ivory, opacity: 0.7, fontSize: 11, cursor: "pointer" }}>
-              デモ用アカウント一覧を見る
-            </button>
-            {showAdminHelp && (
-              <div style={{ marginTop: 10, fontSize: 11.5, color: C.ink, background: C.white, borderRadius: 4, padding: 14, textAlign: "left", lineHeight: 1.8 }}>
-                承認済サロン: <b>salon@sample.com</b><br />
-                運営者コード: <b>yomogi2026</b>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -487,9 +559,27 @@ function RegisterScreen({ onSubmit, goLogin }) {
     instagram: "", salonUrl: "", desiredProducts: "", notes: "",
   });
   const [done, setDone] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const canSubmit = form.salonName && form.contactName && form.email && form.phone && form.address;
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setSubmitError("");
+    const { error } = await onSubmit(form);
+    setSubmitting(false);
+    if (error) {
+      setSubmitError(
+        error.code === "23505"
+          ? "このメールアドレスはすでに登録されています。"
+          : "登録に失敗しました。時間をおいて再度お試しください。"
+      );
+      return;
+    }
+    setDone(true);
+  };
 
   if (done) {
     return (
@@ -530,8 +620,9 @@ function RegisterScreen({ onSubmit, goLogin }) {
           <Field label="サロンURL"><Input value={form.salonUrl} onChange={set("salonUrl")} placeholder="https://" /></Field>
           <Field label="希望する取扱商品"><Input value={form.desiredProducts} onChange={set("desiredProducts")} placeholder="例）よもぎの環 入浴剤" /></Field>
           <Field label="その他備考"><TextArea value={form.notes} onChange={set("notes")} /></Field>
-          <Btn full disabled={!canSubmit} onClick={() => { onSubmit(form); setDone(true); }}>
-            登録する
+          {submitError && <div style={{ color: C.clay, fontSize: 12.5, marginBottom: 14 }}>{submitError}</div>}
+          <Btn full disabled={!canSubmit || submitting} onClick={handleSubmit}>
+            {submitting ? "登録中…" : "登録する"}
           </Btn>
         </Card>
       </Screen>
@@ -1269,10 +1360,11 @@ function ProductEditForm({ initial, onSave, onCancel }) {
   );
 }
 
-function AdminSettings({ bankInfo, setBankInfo }) {
+function AdminSettings({ bankInfo, onSave }) {
   const [f, setF] = useState(bankInfo);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   return (
     <Screen maxWidth={620}>
       <SectionTitle eyebrow="ADMIN" title="設定 ・ 振込先情報" />
@@ -1283,7 +1375,18 @@ function AdminSettings({ bankInfo, setBankInfo }) {
         <Field label="口座番号"><Input value={f.accountNumber} onChange={set("accountNumber")} /></Field>
         <Field label="口座名義"><Input value={f.accountHolder} onChange={set("accountHolder")} /></Field>
         <Field label="振込期限（注文から何日以内）"><Input type="number" value={f.deadlineDays} onChange={(e) => setF({ ...f, deadlineDays: Number(e.target.value) })} /></Field>
-        <Btn onClick={() => { setBankInfo(f); setSaved(true); setTimeout(() => setSaved(false), 2000); }}>保存する</Btn>
+        <Btn
+          disabled={saving}
+          onClick={async () => {
+            setSaving(true);
+            await onSave(f);
+            setSaving(false);
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+          }}
+        >
+          {saving ? "保存中…" : "保存する"}
+        </Btn>
         {saved && <span style={{ marginLeft: 12, color: C.forestSoft, fontSize: 12.5 }}>保存しました</span>}
       </Card>
 
@@ -1303,14 +1406,15 @@ function AdminSettings({ bankInfo, setBankInfo }) {
    ROOT APP
 ============================================================ */
 export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState("guest"); // guest | salon-unregistered | salon-pending | salon | admin
+  const [salon, setSalon] = useState(null);
   const [salons, setSalons] = useState([]);
-  const [products, setProducts] = useState(DEFAULT_PRODUCTS);
+  const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [bankInfo, setBankInfo] = useState(DEFAULT_BANK);
 
-  const [role, setRole] = useState("guest"); // guest | salon | admin
-  const [currentSalonId, setCurrentSalonId] = useState(null);
   const [view, setViewRaw] = useState("login");
   const [selectedProductId, setSelectedProductId] = useState(null);
   const [lastOrderId, setLastOrderId] = useState(null);
@@ -1322,76 +1426,179 @@ export default function App() {
     setViewRaw(v);
   };
 
-  // initial load
+  // Track the Supabase auth session (covers magic-link and password sign-in).
   useEffect(() => {
-    (async () => {
-      const [s, p, o, b] = await Promise.all([
-        loadShared("yomogi_salons", null),
-        loadShared("yomogi_products", null),
-        loadShared("yomogi_orders", null),
-        loadShared("yomogi_bank", null),
-      ]);
-      let seededSalons = s;
-      if (!seededSalons) {
-        seededSalons = [{
-          id: "salon_sample", salonName: "サンプルサロン 花", contactName: "山田 花子",
-          email: "salon@sample.com", phone: "090-1234-5678", zip: "530-0001",
-          address: "大阪府大阪市北区梅田1-1-1", instagram: "@sample_salon", salonUrl: "",
-          desiredProducts: "よもぎの環 入浴剤", notes: "", status: "approved", registeredAt: todayStr(),
-        }];
-        await saveShared("yomogi_salons", seededSalons);
-      }
-      setSalons(seededSalons);
-      setProducts(p || DEFAULT_PRODUCTS);
-      if (!p) await saveShared("yomogi_products", DEFAULT_PRODUCTS);
-      setOrders(o || []);
-      setBankInfo(b || DEFAULT_BANK);
-      if (!b) await saveShared("yomogi_bank", DEFAULT_BANK);
-      setLoading(false);
-    })();
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
 
-  useEffect(() => { if (!loading) saveShared("yomogi_salons", salons); }, [salons, loading]);
-  useEffect(() => { if (!loading) saveShared("yomogi_products", products); }, [products, loading]);
-  useEffect(() => { if (!loading) saveShared("yomogi_orders", orders); }, [orders, loading]);
-  useEffect(() => { if (!loading) saveShared("yomogi_bank", bankInfo); }, [bankInfo, loading]);
+  // Once we know who's signed in (or that nobody is), figure out their role
+  // and load whatever data that role is allowed to see under RLS.
+  useEffect(() => {
+    if (session === undefined) return;
+    (async () => {
+      setLoading(true);
 
-  const salon = salons.find((s) => s.id === currentSalonId) || null;
+      if (!session) {
+        setRole("guest");
+        setSalon(null);
+        setView("login");
+        setLoading(false);
+        return;
+      }
+
+      const email = session.user.email;
+      const { data: adminRow } = await supabase.from("admins").select("email").eq("email", email).maybeSingle();
+
+      if (adminRow) {
+        const [{ data: salonsData }, { data: ordersData }, { data: productsData }, { data: bankData }] = await Promise.all([
+          supabase.from("salons").select("*").order("registered_at", { ascending: true }),
+          supabase.from("orders").select("*").order("created_at", { ascending: true }),
+          supabase.from("products").select("*"),
+          supabase.from("bank_info").select("*").maybeSingle(),
+        ]);
+        setSalons(mapSalons(salonsData));
+        setOrders(mapOrders(ordersData));
+        setProducts(mapProducts(productsData));
+        setBankInfo(mapBankInfo(bankData));
+        setRole("admin");
+        setView("admin-dashboard");
+        setLoading(false);
+        return;
+      }
+
+      let { data: salonRow } = await supabase.from("salons").select("*").eq("user_id", session.user.id).maybeSingle();
+      if (!salonRow) {
+        const { data: unclaimed } = await supabase.from("salons").select("*").eq("email", email).is("user_id", null).maybeSingle();
+        if (unclaimed) {
+          const { data: claimed } = await supabase
+            .from("salons")
+            .update({ user_id: session.user.id })
+            .eq("id", unclaimed.id)
+            .select()
+            .maybeSingle();
+          salonRow = claimed || unclaimed;
+        }
+      }
+
+      if (!salonRow) {
+        setRole("salon-unregistered");
+        setSalon(null);
+        setLoading(false);
+        return;
+      }
+      if (salonRow.status !== "approved") {
+        setRole("salon-pending");
+        setSalon(mapSalon(salonRow));
+        setLoading(false);
+        return;
+      }
+
+      const [{ data: ordersData }, { data: productsData }, { data: bankData }] = await Promise.all([
+        supabase.from("orders").select("*").eq("salon_id", salonRow.id).order("created_at", { ascending: true }),
+        supabase.from("products").select("*").eq("active", true),
+        supabase.from("bank_info").select("*").maybeSingle(),
+      ]);
+      setSalon(mapSalon(salonRow));
+      setOrders(mapOrders(ordersData));
+      setProducts(mapProducts(productsData));
+      setBankInfo(mapBankInfo(bankData));
+      setRole("salon");
+      setView("top");
+      setLoading(false);
+    })();
+  }, [session]);
+
   const selectedProduct = products.find((p) => p.id === selectedProductId) || null;
   const lastOrder = orders.find((o) => o.id === lastOrderId) || null;
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
 
-  const registerSalon = (form) => {
-    setSalons((prev) => [...prev, { ...form, id: uid("salon_"), status: "pending", registeredAt: todayStr() }]);
+  const registerSalon = async (form) => {
+    const { error } = await supabase.from("salons").insert({
+      salon_name: form.salonName,
+      contact_name: form.contactName,
+      email: form.email,
+      phone: form.phone,
+      zip: form.zip,
+      address: form.address,
+      instagram: form.instagram,
+      salon_url: form.salonUrl,
+      desired_products: form.desiredProducts,
+      notes: form.notes,
+    });
+    return { error };
   };
-  const updateSalon = (id, patch) => setSalons((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-  const updateProduct = (id, patch) => setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-  const addProduct = (data) => setProducts((prev) => [...prev, { ...data, id: uid("prod_") }]);
-  const updateOrder = (id, patch) => setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
 
-  const confirmOrder = () => {
+  const updateSalon = async (id, patch) => {
+    const dbPatch = {};
+    if ("status" in patch) dbPatch.status = patch.status;
+    await supabase.from("salons").update(dbPatch).eq("id", id);
+    const { data } = await supabase.from("salons").select("*").order("registered_at", { ascending: true });
+    setSalons(mapSalons(data));
+  };
+
+  const updateProduct = async (id, patch) => {
+    await supabase.from("products").update(productToDb(patch)).eq("id", id);
+    const { data } = await supabase.from("products").select("*");
+    setProducts(mapProducts(data));
+  };
+
+  const addProduct = async (data) => {
+    await supabase.from("products").insert(productToDb(data));
+    const { data: rows } = await supabase.from("products").select("*");
+    setProducts(mapProducts(rows));
+  };
+
+  const updateOrder = async (id, patch) => {
+    await supabase.from("orders").update(orderPatchToDb(patch)).eq("id", id);
+    const { data } = await supabase.from("orders").select("*").order("created_at", { ascending: true });
+    setOrders(mapOrders(data));
+  };
+
+  const saveBankInfo = async (f) => {
+    await supabase
+      .from("bank_info")
+      .update({
+        bank_name: f.bankName,
+        branch_name: f.branchName,
+        account_type: f.accountType,
+        account_number: f.accountNumber,
+        account_holder: f.accountHolder,
+        deadline_days: f.deadlineDays,
+      })
+      .eq("id", true);
+    setBankInfo(f);
+  };
+
+  const confirmOrder = async () => {
     const { items, subtotal, shipping, total } = calcCartTotals(cart, products);
-    const order = {
-      id: uid("order_"), orderNumber: genOrderNumber(), salonId: salon.id,
-      items, subtotal, shipping, total,
-      paymentStatus: "未入金", paymentRequested: true, shipStatus: "未発送",
-      carrier: "", trackingNumber: "", shippedAt: "",
-      createdAt: todayStr(),
-    };
-    setOrders((prev) => [...prev, order]);
-    // decrement stock
-    setProducts((prev) => prev.map((p) => {
-      const line = items.find((i) => i.productId === p.id);
-      return line ? { ...p, stock: Math.max(0, p.stock - line.qty) } : p;
-    }));
+    const { data, error } = await supabase.rpc("place_order", {
+      p_order_number: genOrderNumber(),
+      p_items: items,
+      p_subtotal: subtotal,
+      p_shipping: shipping,
+      p_total: total,
+    });
+    if (error) {
+      alert("注文の作成に失敗しました：" + error.message);
+      return;
+    }
+    const newOrder = mapOrder(data);
+    setOrders((prev) => [...prev, newOrder]);
+    const { data: productsData } = await supabase.from("products").select("*").eq("active", true);
+    setProducts(mapProducts(productsData));
     setCart([]);
-    setLastOrderId(order.id);
+    setLastOrderId(newOrder.id);
     setView("complete");
   };
 
-  const doLoginSalon = (id) => { setCurrentSalonId(id); setRole("salon"); setView("top"); };
-  const doLoginAdmin = () => { setRole("admin"); setView("admin-dashboard"); };
-  const doLogout = () => { setRole("guest"); setCurrentSalonId(null); setCart([]); setView("login"); };
+  const doLogout = async () => {
+    await supabase.auth.signOut();
+    setCart([]);
+  };
 
   const style = (
     <style>{`
@@ -1420,8 +1627,42 @@ export default function App() {
         {view === "register" ? (
           <RegisterScreen onSubmit={registerSalon} goLogin={() => setView("login")} />
         ) : (
-          <LoginScreen salons={salons} onLoginSalon={doLoginSalon} onLoginAdmin={doLoginAdmin} goRegister={() => setView("register")} />
+          <LoginScreen goRegister={() => setView("register")} />
         )}
+      </div>
+    );
+  }
+
+  // A magic-link sign-in that doesn't match any salon registration.
+  if (role === "salon-unregistered") {
+    return (
+      <div style={{ minHeight: "100vh", background: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        {style}
+        <Card style={{ padding: 32, textAlign: "center", maxWidth: 400 }}>
+          <AlertCircle size={32} color={C.clay} style={{ marginBottom: 14 }} />
+          <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 18, marginBottom: 10 }}>登録が見つかりません</div>
+          <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8, marginBottom: 24 }}>
+            このメールアドレスでの取扱店登録が見つかりませんでした。取扱店登録からお申し込みください。
+          </div>
+          <Btn full onClick={doLogout}>ログアウト</Btn>
+        </Card>
+      </div>
+    );
+  }
+
+  // Registered but not yet approved by the operator.
+  if (role === "salon-pending") {
+    return (
+      <div style={{ minHeight: "100vh", background: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        {style}
+        <Card style={{ padding: 32, textAlign: "center", maxWidth: 400 }}>
+          <Clock size={32} color={C.gold} style={{ marginBottom: 14 }} />
+          <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 18, marginBottom: 10 }}>承認をお待ちください</div>
+          <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8, marginBottom: 24 }}>
+            ご登録ありがとうございます。現在、運営者による承認をお待ちいただいております。
+          </div>
+          <Btn full onClick={doLogout}>ログアウト</Btn>
+        </Card>
       </div>
     );
   }
@@ -1437,7 +1678,7 @@ export default function App() {
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} />}
         {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} />}
-        {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} setBankInfo={setBankInfo} />}
+        {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
       </div>
     );
   }
