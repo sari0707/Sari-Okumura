@@ -54,6 +54,7 @@ create table if not exists salons (
   desired_products text,
   notes text,
   status text not null default 'pending' check (status in ('pending', 'approved')),
+  account_type text not null default 'salon' check (account_type in ('salon', 'partner')),
   registered_at timestamptz not null default now()
 );
 
@@ -99,6 +100,7 @@ create table if not exists products (
   description text,
   general_price numeric not null default 0,
   wholesale_price numeric not null default 0,
+  partner_price numeric,
   min_order_qty int not null default 1,
   stock int not null default 0,
   active boolean not null default true

@@ -94,6 +94,7 @@ const mapSalon = (r) => ({
   desiredProducts: r.desired_products || "",
   notes: r.notes || "",
   status: r.status,
+  partnerAccount: r.account_type === "partner",
   registeredAt: fmtDate(r.registered_at),
 });
 const mapSalons = (rows) => (rows || []).map(mapSalon);
@@ -105,11 +106,17 @@ const mapProduct = (r) => ({
   description: r.description || "",
   generalPrice: Number(r.general_price),
   wholesalePrice: Number(r.wholesale_price),
+  partnerPrice: r.partner_price == null ? null : Number(r.partner_price),
   minOrderQty: r.min_order_qty,
   stock: r.stock,
   active: r.active,
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
+
+// Salons and 営業パートナー (sales partners) share the same catalog; a
+// partner just sees their own price where the operator has set one.
+const priceFor = (product, salon) =>
+  salon?.partnerAccount && product.partnerPrice != null ? product.partnerPrice : product.wholesalePrice;
 
 const mapOrder = (r) => ({
   id: r.id,
@@ -148,6 +155,7 @@ const productToDb = (patch) => {
   if ("description" in patch) dbPatch.description = patch.description;
   if ("generalPrice" in patch) dbPatch.general_price = patch.generalPrice;
   if ("wholesalePrice" in patch) dbPatch.wholesale_price = patch.wholesalePrice;
+  if ("partnerPrice" in patch) dbPatch.partner_price = patch.partnerPrice === "" ? null : patch.partnerPrice;
   if ("minOrderQty" in patch) dbPatch.min_order_qty = patch.minOrderQty;
   if ("stock" in patch) dbPatch.stock = patch.stock;
   if ("active" in patch) dbPatch.active = patch.active;
@@ -714,7 +722,7 @@ function TopPage({ salon, products, orders, setView }) {
           <Card key={p.id} style={{ padding: 14, cursor: "pointer" }} onClick={() => setView("productDetail", p.id)}>
             <ProductArt size={56} />
             <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, marginTop: 10, lineHeight: 1.4 }}>{p.name}</div>
-            <div style={{ fontSize: 12, color: C.gold, fontWeight: 700, marginTop: 4 }}>{yen(p.wholesalePrice)}〜</div>
+            <div style={{ fontSize: 12, color: C.gold, fontWeight: 700, marginTop: 4 }}>{yen(priceFor(p, salon))}〜</div>
           </Card>
         ))}
       </div>
@@ -736,7 +744,7 @@ function TopPage({ salon, products, orders, setView }) {
 /* ============================================================
    SALON: PRODUCT LIST / DETAIL
 ============================================================ */
-function ProductListScreen({ products, cart, setCart, setView }) {
+function ProductListScreen({ products, cart, setCart, salon, setView }) {
   const [qtyMap, setQtyMap] = useState({});
   const activeProducts = products.filter((p) => p.active);
 
@@ -770,8 +778,8 @@ function ProductListScreen({ products, cart, setCart, setView }) {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 10.5, color: C.inkSoft, textDecoration: "line-through" }}>{yen(p.generalPrice)}</div>
-                <div style={{ fontSize: 16, color: C.forest, fontWeight: 700 }}>{yen(p.wholesalePrice)}</div>
-                <div style={{ fontSize: 10, color: C.inkSoft }}>卸価格 / 税込</div>
+                <div style={{ fontSize: 16, color: C.forest, fontWeight: 700 }}>{yen(priceFor(p, salon))}</div>
+                <div style={{ fontSize: 10, color: C.inkSoft }}>{salon?.partnerAccount ? "パートナー価格" : "卸価格"} / 税込</div>
               </div>
             </div>
 
@@ -799,7 +807,7 @@ function ProductListScreen({ products, cart, setCart, setView }) {
   );
 }
 
-function ProductDetailScreen({ product, setCart, setView }) {
+function ProductDetailScreen({ product, setCart, salon, setView }) {
   const [qty, setQty] = useState(product?.minOrderQty || 1);
   if (!product) return <Screen><EmptyState title="商品が見つかりません" /></Screen>;
 
@@ -824,7 +832,7 @@ function ProductDetailScreen({ product, setCart, setView }) {
       <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 14 }}>{product.volume}</div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 18 }}>
-        <div style={{ fontSize: 22, fontWeight: 700, color: C.forest }}>{yen(product.wholesalePrice)}</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: C.forest }}>{yen(priceFor(product, salon))}</div>
         <div style={{ fontSize: 12, color: C.inkSoft, textDecoration: "line-through" }}>一般価格 {yen(product.generalPrice)}</div>
       </div>
 
@@ -859,10 +867,12 @@ function ProductDetailScreen({ product, setCart, setView }) {
 const SHIPPING_FEE = 800;
 const FREE_SHIP_THRESHOLD = 30000;
 
-function calcCartTotals(cart, products) {
+function calcCartTotals(cart, products, salon) {
   const items = cart.map((c) => {
     const p = products.find((pp) => pp.id === c.productId);
-    return p ? { productId: p.id, name: p.name, unitPrice: p.wholesalePrice, qty: c.qty, subtotal: p.wholesalePrice * c.qty } : null;
+    if (!p) return null;
+    const unitPrice = priceFor(p, salon);
+    return { productId: p.id, name: p.name, unitPrice, qty: c.qty, subtotal: unitPrice * c.qty };
   }).filter(Boolean);
   const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
   const shipping = subtotal === 0 || subtotal >= FREE_SHIP_THRESHOLD ? 0 : SHIPPING_FEE;
@@ -870,8 +880,8 @@ function calcCartTotals(cart, products) {
   return { items, subtotal, shipping, total };
 }
 
-function CartScreen({ cart, setCart, products, setView }) {
-  const { items, subtotal, shipping, total } = calcCartTotals(cart, products);
+function CartScreen({ cart, setCart, products, salon, setView }) {
+  const { items, subtotal, shipping, total } = calcCartTotals(cart, products, salon);
   const updateQty = (id, qty) => {
     if (qty <= 0) { setCart(cart.filter((c) => c.productId !== id)); return; }
     setCart(cart.map((c) => (c.productId === id ? { ...c, qty } : c)));
@@ -929,7 +939,7 @@ function Row({ label, value, sub }) {
 }
 
 function CheckoutScreen({ salon, cart, products, bankInfo, onConfirm, setView }) {
-  const { items, subtotal, shipping, total } = calcCartTotals(cart, products);
+  const { items, subtotal, shipping, total } = calcCartTotals(cart, products, salon);
   return (
     <Screen>
       <SectionTitle eyebrow="CONFIRM" title="注文内容の確認" />
@@ -1205,7 +1215,14 @@ function AdminSalons({ salons, updateSalon }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", cursor: "pointer" }}
               onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{s.salonName}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{s.salonName}</div>
+                  {s.partnerAccount && (
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: C.gold + "20", color: C.gold }}>
+                      パートナー
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{s.contactName} ・ {s.email}</div>
                 <div style={{ fontSize: 11, color: C.inkSoft, marginTop: 2 }}>登録日：{s.registeredAt}</div>
               </div>
@@ -1226,6 +1243,17 @@ function AdminSalons({ salons, updateSalon }) {
                 {s.salonUrl && <div>URL：{s.salonUrl}</div>}
                 {s.desiredProducts && <div>希望商品：{s.desiredProducts}</div>}
                 {s.notes && <div>備考：{s.notes}</div>}
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, color: C.inkSoft, marginBottom: 5 }}>区分</div>
+                  <select
+                    value={s.partnerAccount ? "partner" : "salon"}
+                    onChange={(e) => updateSalon(s.id, { partnerAccount: e.target.value === "partner" })}
+                    style={{ fontSize: 12.5, padding: "6px 8px", borderRadius: 3, border: `1px solid ${C.line}` }}
+                  >
+                    <option value="salon">サロン</option>
+                    <option value="partner">営業パートナー</option>
+                  </select>
+                </div>
                 <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
                   {s.status !== "approved" ? (
                     <Btn onClick={() => updateSalon(s.id, { status: "approved" })} icon={CheckCircle2}>承認する</Btn>
@@ -1348,7 +1376,7 @@ function AdminProducts({ products, updateProduct, addProduct }) {
                   <div style={{ fontWeight: 700, fontSize: 13.5 }}>{p.name}</div>
                   <div style={{ fontSize: 11.5, color: C.inkSoft }}>{p.volume}</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>
-                    卸 {yen(p.wholesalePrice)} ／ 一般 {yen(p.generalPrice)} ／ 在庫 {p.stock} ／ 最低{p.minOrderQty}個
+                    卸 {yen(p.wholesalePrice)} ／ パートナー {p.partnerPrice == null ? "卸価格と同じ" : yen(p.partnerPrice)} ／ 一般 {yen(p.generalPrice)} ／ 在庫 {p.stock} ／ 最低{p.minOrderQty}個
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -1372,8 +1400,10 @@ function AdminProducts({ products, updateProduct, addProduct }) {
 }
 
 function ProductEditForm({ initial, onSave, onCancel }) {
-  const [f, setF] = useState(initial || {
+  const [f, setF] = useState({
     name: "", volume: "", description: "", generalPrice: 0, wholesalePrice: 0, minOrderQty: 1, stock: 0, active: true,
+    ...initial,
+    partnerPrice: initial?.partnerPrice ?? "",
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setNum = (k) => (e) => setF({ ...f, [k]: Number(e.target.value) });
@@ -1386,11 +1416,14 @@ function ProductEditForm({ initial, onSave, onCancel }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="一般販売価格（円）"><Input type="number" value={f.generalPrice} onChange={setNum("generalPrice")} /></Field>
         <Field label="サロン卸価格（円）"><Input type="number" value={f.wholesalePrice} onChange={setNum("wholesalePrice")} /></Field>
+        <Field label="営業パートナー価格（円）" hint="空欄ならサロン卸価格と同じになります">
+          <Input type="number" value={f.partnerPrice} onChange={set("partnerPrice")} placeholder="サロン卸価格と同じ" />
+        </Field>
         <Field label="最低注文数"><Input type="number" value={f.minOrderQty} onChange={setNum("minOrderQty")} /></Field>
         <Field label="在庫数"><Input type="number" value={f.stock} onChange={setNum("stock")} /></Field>
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-        <Btn onClick={() => onSave(f)}>保存する</Btn>
+        <Btn onClick={() => onSave({ ...f, partnerPrice: f.partnerPrice === "" ? "" : Number(f.partnerPrice) })}>保存する</Btn>
         <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
       </div>
     </Card>
@@ -1581,6 +1614,7 @@ export default function App() {
   const updateSalon = async (id, patch) => {
     const dbPatch = {};
     if ("status" in patch) dbPatch.status = patch.status;
+    if ("partnerAccount" in patch) dbPatch.account_type = patch.partnerAccount ? "partner" : "salon";
     await supabase.from("salons").update(dbPatch).eq("id", id);
     const { data } = await supabase.from("salons").select("*").order("registered_at", { ascending: true });
     setSalons(mapSalons(data));
@@ -1620,7 +1654,7 @@ export default function App() {
   };
 
   const confirmOrder = async () => {
-    const { items, subtotal, shipping, total } = calcCartTotals(cart, products);
+    const { items, subtotal, shipping, total } = calcCartTotals(cart, products, salon);
     const { data, error } = await supabase.rpc("place_order", {
       p_order_number: genOrderNumber(),
       p_items: items,
@@ -1737,9 +1771,9 @@ export default function App() {
       <TopBar salon onLogout={doLogout} cartCount={cartCount} view={view} setView={setView} />
       <div style={{ flex: 1 }}>
         {view === "top" && <TopPage salon={salon} products={products} orders={orders} setView={setView} />}
-        {view === "products" && <ProductListScreen products={products} cart={cart} setCart={setCart} setView={setView} />}
-        {view === "productDetail" && <ProductDetailScreen product={selectedProduct} setCart={setCart} setView={setView} />}
-        {view === "cart" && <CartScreen cart={cart} setCart={setCart} products={products} setView={setView} />}
+        {view === "products" && <ProductListScreen products={products} cart={cart} setCart={setCart} salon={salon} setView={setView} />}
+        {view === "productDetail" && <ProductDetailScreen product={selectedProduct} setCart={setCart} salon={salon} setView={setView} />}
+        {view === "cart" && <CartScreen cart={cart} setCart={setCart} products={products} salon={salon} setView={setView} />}
         {view === "checkout" && <CheckoutScreen salon={salon} cart={cart} products={products} bankInfo={bankInfo} onConfirm={confirmOrder} setView={setView} />}
         {view === "complete" && <CompleteScreen order={lastOrder} bankInfo={bankInfo} setView={setView} />}
         {view === "mypage" && <MyPageScreen salon={salon} orders={orders} setView={setView} />}
