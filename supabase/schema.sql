@@ -235,3 +235,16 @@ values (
   3300, 1980, 3, 48, true
 )
 on conflict do nothing;
+
+-- ---------------------------------------------------------------------------
+-- public_salon_directory: lets the (password-gated, but unauthenticated)
+-- login screen list approved salon names to pick from, and looks up the
+-- email needed to actually sign in with the shared salon password. Owned by
+-- the table owner, so it reads through RLS on `salons` once, at view-creation
+-- time, rather than per request — the standard Postgres/Supabase pattern for
+-- exposing a narrow, filtered slice of an RLS-protected table.
+-- ---------------------------------------------------------------------------
+create or replace view public_salon_directory as
+  select id, salon_name, email from salons where status = 'approved';
+
+grant select on public_salon_directory to anon, authenticated;

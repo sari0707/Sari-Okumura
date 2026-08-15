@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { supabase } from "./src/supabaseClient.js";
 
+const SALON_SHARED_PASSWORD = import.meta.env.VITE_SALON_SHARED_PASSWORD || "";
+
 /* ============================================================
    BRAND TOKENS
    forest: #2D4A35 / forest-deep:#1F3527 / gold:#C9A84C
@@ -437,26 +439,46 @@ function SectionTitle({ eyebrow, title, right }) {
 ============================================================ */
 function LoginScreen({ goRegister }) {
   const [mode, setMode] = useState("salon"); // "salon" | "admin"
+  const [salonStep, setSalonStep] = useState("password"); // "password" | "pick"
+  const [salonPassword, setSalonPassword] = useState("");
+  const [salonList, setSalonList] = useState([]);
+  const [selectedSalonId, setSelectedSalonId] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
 
-  const submitSalon = async () => {
-    if (!email.trim()) return;
-    setSending(true);
+  const submitSalonPassword = async () => {
     setError("");
-    const { error: err } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
+    if (salonPassword !== SALON_SHARED_PASSWORD) {
+      setError("パスワードが正しくありません。");
+      return;
+    }
+    setSending(true);
+    const { data, error: err } = await supabase.from("public_salon_directory").select("*").order("salon_name");
+    setSending(false);
+    if (err || !data || data.length === 0) {
+      setError("サロン一覧の取得に失敗しました。時間をおいて再度お試しください。");
+      return;
+    }
+    setSalonList(data);
+    setSelectedSalonId(data[0].id);
+    setSalonStep("pick");
+  };
+
+  const submitSalonLogin = async () => {
+    setError("");
+    const picked = salonList.find((s) => s.id === selectedSalonId);
+    if (!picked) return;
+    setSending(true);
+    const { error: err } = await supabase.auth.signInWithPassword({
+      email: picked.email,
+      password: salonPassword,
     });
     setSending(false);
     if (err) {
-      setError("送信に失敗しました。時間をおいて再度お試しください。");
-      return;
+      setError("ログインに失敗しました。運営者にご確認ください。");
     }
-    setSent(true);
   };
 
   const submitAdmin = async () => {
@@ -469,22 +491,6 @@ function LoginScreen({ goRegister }) {
       setError("メールアドレスまたはパスワードが正しくありません。");
     }
   };
-
-  if (sent) {
-    return (
-      <div style={{ minHeight: "100vh", background: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-        <Card style={{ padding: 32, textAlign: "center", maxWidth: 400 }}>
-          <Mail size={32} color={C.forest} style={{ marginBottom: 14 }} />
-          <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 18, marginBottom: 10 }}>
-            ログイン用のメールを送信しました
-          </div>
-          <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8 }}>
-            {email} 宛にログインリンクをお送りしました。メール内のリンクをクリックしてログインを完了してください。
-          </div>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${C.forestDeep}, ${C.forest} 45%, ${C.ivory} 45%)` }}>
@@ -501,28 +507,59 @@ function LoginScreen({ goRegister }) {
       <div style={{ maxWidth: 420, margin: "0 auto", padding: "0 20px 40px" }}>
         <Card style={{ padding: 28, boxShadow: "0 10px 30px rgba(27,46,34,0.18)" }}>
           {mode === "salon" ? (
-            <>
-              <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
-                ご登録のメールアドレスを入力すると、ログイン用のリンクをお送りします。パスワードは不要です。
-              </div>
-              <Field label="メールアドレス" required>
-                <Input type="email" placeholder="salon@example.com" value={email}
-                  onChange={(e) => setEmail(e.target.value)} />
-              </Field>
-              {error && (
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: C.claySoft, color: C.clay, padding: "10px 12px", borderRadius: 4, fontSize: 12.5, marginBottom: 16, lineHeight: 1.6 }}>
-                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
+            salonStep === "password" ? (
+              <>
+                <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
+                  取扱店共通のパスワードを入力してください。
                 </div>
-              )}
-              <Btn full icon={Lock} onClick={submitSalon} disabled={sending}>
-                {sending ? "送信中…" : "ログインリンクを送る"}
-              </Btn>
-              <div style={{ textAlign: "center", marginTop: 18 }}>
-                <button onClick={goRegister} style={{ background: "none", border: "none", color: C.forest, fontWeight: 700, fontSize: 13.5, cursor: "pointer", textDecoration: "underline" }}>
-                  取扱店登録はこちら
-                </button>
-              </div>
-            </>
+                <Field label="パスワード" required>
+                  <Input type="password" placeholder="••••••••" value={salonPassword}
+                    onChange={(e) => setSalonPassword(e.target.value)} />
+                </Field>
+                {error && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: C.claySoft, color: C.clay, padding: "10px 12px", borderRadius: 4, fontSize: 12.5, marginBottom: 16, lineHeight: 1.6 }}>
+                    <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
+                  </div>
+                )}
+                <Btn full icon={Lock} onClick={submitSalonPassword} disabled={sending}>
+                  {sending ? "確認中…" : "次へ"}
+                </Btn>
+                <div style={{ textAlign: "center", marginTop: 18 }}>
+                  <button onClick={goRegister} style={{ background: "none", border: "none", color: C.forest, fontWeight: 700, fontSize: 13.5, cursor: "pointer", textDecoration: "underline" }}>
+                    取扱店登録はこちら
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
+                  ご自身のサロンを選択してください。
+                </div>
+                <Field label="サロン名" required>
+                  <select
+                    value={selectedSalonId}
+                    onChange={(e) => setSelectedSalonId(e.target.value)}
+                    style={inputStyle}
+                  >
+                    {salonList.map((s) => (
+                      <option key={s.id} value={s.id}>{s.salon_name}</option>
+                    ))}
+                  </select>
+                </Field>
+                {error && <div style={{ color: C.clay, fontSize: 12.5, marginBottom: 14 }}>{error}</div>}
+                <Btn full icon={Lock} onClick={submitSalonLogin} disabled={sending}>
+                  {sending ? "ログイン中…" : "ログイン"}
+                </Btn>
+                <div style={{ textAlign: "center", marginTop: 18 }}>
+                  <button
+                    onClick={() => { setSalonStep("password"); setError(""); }}
+                    style={{ background: "none", border: "none", color: C.inkSoft, fontSize: 12.5, cursor: "pointer" }}
+                  >
+                    ← パスワード入力へ戻る
+                  </button>
+                </div>
+              </>
+            )
           ) : (
             <>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.forest, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>
@@ -541,7 +578,7 @@ function LoginScreen({ goRegister }) {
 
           <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 22, paddingTop: 16, textAlign: "center" }}>
             <button
-              onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setError(""); }}
+              onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setSalonStep("password"); setError(""); }}
               style={{ background: "none", border: "none", color: C.inkSoft, fontSize: 12, cursor: "pointer" }}
             >
               {mode === "admin" ? "← サロン用ログインへ戻る" : "運営者の方はこちら"}
@@ -572,7 +609,7 @@ function RegisterScreen({ onSubmit, goLogin }) {
     setSubmitting(false);
     if (error) {
       setSubmitError(
-        error.code === "23505"
+        error.code === "23505" || error.code === "user_already_exists"
           ? "このメールアドレスはすでに登録されています。"
           : "登録に失敗しました。時間をおいて再度お試しください。"
       );
@@ -1517,6 +1554,12 @@ export default function App() {
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
 
   const registerSalon = async (form) => {
+    const { error: signUpErr } = await supabase.auth.signUp({
+      email: form.email,
+      password: SALON_SHARED_PASSWORD,
+    });
+    if (signUpErr) return { error: signUpErr };
+
     const { error } = await supabase.from("salons").insert({
       salon_name: form.salonName,
       contact_name: form.contactName,
@@ -1529,6 +1572,9 @@ export default function App() {
       desired_products: form.desiredProducts,
       notes: form.notes,
     });
+    // signUp() logs this browser in immediately; sign back out so the guest
+    // stays on the registration confirmation screen until an admin approves.
+    await supabase.auth.signOut();
     return { error };
   };
 
