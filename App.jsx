@@ -68,6 +68,8 @@ const DEFAULT_BANK = {
   accountNumber: "1234567",
   accountHolder: "ヨモギノワ サリ",
   deadlineDays: 7,
+  issuerName: "",
+  issuerAddress: "",
 };
 
 /* ------------------------------------------------------------
@@ -145,6 +147,8 @@ const mapBankInfo = (r) =>
         accountNumber: r.account_number,
         accountHolder: r.account_holder,
         deadlineDays: r.deadline_days,
+        issuerName: r.issuer_name || "",
+        issuerAddress: r.issuer_address || "",
       }
     : DEFAULT_BANK;
 
@@ -1271,7 +1275,7 @@ function AdminSalons({ salons, updateSalon }) {
   );
 }
 
-function AdminOrders({ orders, salons, updateOrder }) {
+function AdminOrders({ orders, salons, updateOrder, setView }) {
   const [filter, setFilter] = useState("all");
   const filtered = [...orders].reverse().filter((o) => filter === "all" || deriveOrderStatus(o) === filter);
 
@@ -1334,12 +1338,80 @@ function AdminOrders({ orders, salons, updateOrder }) {
                   <Input placeholder="追跡番号" defaultValue={o.trackingNumber} onBlur={(e) => updateOrder(o.id, { trackingNumber: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
                 </div>
               )}
+
+              <div style={{ marginTop: 10 }}>
+                <Btn variant="outline" icon={Banknote} onClick={() => setView("admin-receipt", o.id)} style={{ padding: "8px 14px", fontSize: 12.5 }}>
+                  領収書を発行
+                </Btn>
+              </div>
             </Card>
           );
         })}
         {filtered.length === 0 && <EmptyState title="該当する注文がありません" />}
       </div>
     </Screen>
+  );
+}
+
+function ReceiptScreen({ order, salon, bankInfo, setView }) {
+  if (!order || !salon) {
+    return (
+      <Screen>
+        <EmptyState title="領収書を表示できません" sub="対象の注文が見つかりませんでした" />
+      </Screen>
+    );
+  }
+  return (
+    <div style={{ minHeight: "100vh", background: C.ivory }}>
+      <style>{`
+        @media print {
+          .print-hide { display: none !important; }
+          body { background: #fff !important; }
+        }
+      `}</style>
+      <div className="print-hide" style={{ padding: 16, display: "flex", gap: 10, maxWidth: 640, margin: "0 auto" }}>
+        <Btn variant="outline" icon={ChevronLeft} onClick={() => setView("admin-orders")}>注文管理へ戻る</Btn>
+        <Btn icon={Banknote} onClick={() => window.print()}>印刷 / PDF保存</Btn>
+      </div>
+
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "20px 32px 60px", background: C.white, boxShadow: "0 1px 0 rgba(0,0,0,0.05)" }}>
+        <div style={{ textAlign: "center", fontFamily: "'Shippori Mincho', serif", fontSize: 24, fontWeight: 700, letterSpacing: "0.3em", marginBottom: 32 }}>
+          領収書
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 30, fontSize: 12.5, color: C.inkSoft }}>
+          <div>領収書番号：{order.orderNumber}</div>
+          <div>発行日：{todayStr()}</div>
+        </div>
+
+        <div style={{ fontSize: 18, fontWeight: 600, borderBottom: `2px solid ${C.ink}`, paddingBottom: 10, marginBottom: 26 }}>
+          {salon.salonName} 御中
+        </div>
+
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, borderBottom: `1px solid ${C.line}`, paddingBottom: 18, marginBottom: 18 }}>
+          <div style={{ fontSize: 13, color: C.inkSoft }}>金額</div>
+          <div style={{ fontSize: 30, fontWeight: 700, color: C.forest }}>{yen(order.total)}</div>
+          <div style={{ fontSize: 13, color: C.inkSoft }}>（税込）</div>
+        </div>
+
+        <div style={{ fontSize: 13.5, marginBottom: 30 }}>
+          但し　{order.items.map((i) => i.name).join("、")}　代金として
+        </div>
+
+        <Card style={{ padding: 16, marginBottom: 40, fontSize: 12.5 }}>
+          <Row label="商品代金" value={yen(order.subtotal)} />
+          <Row label="送料" value={order.shipping === 0 ? "無料" : yen(order.shipping)} />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontWeight: 700 }}>
+            <span>合計</span><span>{yen(order.total)}</span>
+          </div>
+        </Card>
+
+        <div style={{ textAlign: "right", fontSize: 13, lineHeight: 1.9 }}>
+          <div style={{ fontWeight: 700 }}>{bankInfo.issuerName || "（発行者名が未設定です。設定画面からご入力ください）"}</div>
+          {bankInfo.issuerAddress && <div style={{ color: C.inkSoft }}>{bankInfo.issuerAddress}</div>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1445,6 +1517,21 @@ function AdminSettings({ bankInfo, onSave }) {
         <Field label="口座番号"><Input value={f.accountNumber} onChange={set("accountNumber")} /></Field>
         <Field label="口座名義"><Input value={f.accountHolder} onChange={set("accountHolder")} /></Field>
         <Field label="振込期限（注文から何日以内）"><Input type="number" value={f.deadlineDays} onChange={(e) => setF({ ...f, deadlineDays: Number(e.target.value) })} /></Field>
+      </Card>
+
+      <div style={{ marginTop: 24 }}>
+        <SectionTitle title="領収書発行者情報" />
+        <Card style={{ padding: 22 }}>
+          <Field label="発行者名（屋号・会社名）" hint="領収書に「発行者」として印字されます">
+            <Input value={f.issuerName} onChange={set("issuerName")} placeholder="例）よもぎの環" />
+          </Field>
+          <Field label="発行者住所">
+            <Input value={f.issuerAddress} onChange={set("issuerAddress")} placeholder="都道府県から番地まで" />
+          </Field>
+        </Card>
+      </div>
+
+      <div style={{ marginTop: 24 }}>
         <Btn
           disabled={saving}
           onClick={async () => {
@@ -1458,14 +1545,13 @@ function AdminSettings({ bankInfo, onSave }) {
           {saving ? "保存中…" : "保存する"}
         </Btn>
         {saved && <span style={{ marginLeft: 12, color: C.forestSoft, fontSize: 12.5 }}>保存しました</span>}
-      </Card>
+      </div>
 
       <div style={{ marginTop: 30 }}>
         <SectionTitle title="今後追加予定の機能" />
         <Card style={{ padding: 18, fontSize: 12.5, color: C.inkSoft, lineHeight: 2.1 }}>
-          定期仕入れ ／ クレジットカード決済 ／ 請求書・領収書発行 ／ LINE連携 ／ サロン別購入金額集計 ／
-          売上ランキング ／ ポイント制度 ／ 営業パートナー制度 ／ サロンごとの卸価格設定 ／ キャンペーン管理 ／
-          サロン向け資料・商品画像ダウンロード
+          定期仕入れ ／ クレジットカード決済 ／ 請求書発行 ／ LINE連携 ／ サロン別購入金額集計 ／
+          売上ランキング ／ ポイント制度 ／ キャンペーン管理 ／ サロン向け資料・商品画像ダウンロード
         </Card>
       </div>
     </Screen>
@@ -1488,10 +1574,12 @@ export default function App() {
   const [view, setViewRaw] = useState("login");
   const [selectedProductId, setSelectedProductId] = useState(null);
   const [lastOrderId, setLastOrderId] = useState(null);
+  const [receiptOrderId, setReceiptOrderId] = useState(null);
   const [cart, setCart] = useState([]);
 
   const setView = (v, param) => {
     if (v === "productDetail" && param) setSelectedProductId(param);
+    if (v === "admin-receipt" && param) setReceiptOrderId(param);
     window.scrollTo(0, 0);
     setViewRaw(v);
   };
@@ -1509,10 +1597,16 @@ export default function App() {
   // and load whatever data that role is allowed to see under RLS.
   useEffect(() => {
     if (session === undefined) return;
+    // Guards against a stale run finishing after a newer one already
+    // landed (e.g. registerSalon's signUp()+signOut() fire two auth
+    // state changes in quick succession — the first run's async DB
+    // lookups can otherwise resolve after the second and clobber it).
+    let cancelled = false;
     (async () => {
       setLoading(true);
 
       if (!session) {
+        if (cancelled) return;
         setRole("guest");
         setSalon(null);
         setView("login");
@@ -1530,6 +1624,7 @@ export default function App() {
           supabase.from("products").select("*"),
           supabase.from("bank_info").select("*").maybeSingle(),
         ]);
+        if (cancelled) return;
         setSalons(mapSalons(salonsData));
         setOrders(mapOrders(ordersData));
         setProducts(mapProducts(productsData));
@@ -1554,6 +1649,8 @@ export default function App() {
         }
       }
 
+      if (cancelled) return;
+
       if (!salonRow) {
         setRole("salon-unregistered");
         setSalon(null);
@@ -1572,6 +1669,7 @@ export default function App() {
         supabase.from("products").select("*").eq("active", true),
         supabase.from("bank_info").select("*").maybeSingle(),
       ]);
+      if (cancelled) return;
       setSalon(mapSalon(salonRow));
       setOrders(mapOrders(ordersData));
       setProducts(mapProducts(productsData));
@@ -1580,10 +1678,13 @@ export default function App() {
       setView("top");
       setLoading(false);
     })();
+    return () => { cancelled = true; };
   }, [session]);
 
   const selectedProduct = products.find((p) => p.id === selectedProductId) || null;
   const lastOrder = orders.find((o) => o.id === lastOrderId) || null;
+  const receiptOrder = orders.find((o) => o.id === receiptOrderId) || null;
+  const receiptSalon = salons.find((s) => s.id === receiptOrder?.salonId) || null;
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
 
   const registerSalon = async (form) => {
@@ -1648,6 +1749,8 @@ export default function App() {
         account_number: f.accountNumber,
         account_holder: f.accountHolder,
         deadline_days: f.deadlineDays,
+        issuer_name: f.issuerName,
+        issuer_address: f.issuerAddress,
       })
       .eq("id", true);
     setBankInfo(f);
@@ -1752,13 +1855,16 @@ export default function App() {
     return (
       <div style={{ minHeight: "100vh", background: C.ivory, fontFamily: "'Noto Sans JP', sans-serif" }}>
         {style}
-        <TopBar admin onLogout={doLogout} view={view} setView={setView} />
-        <AdminNav view={view} setView={setView} />
+        <div className="print-hide">
+          <TopBar admin onLogout={doLogout} view={view} setView={setView} />
+          <AdminNav view={view} setView={setView} />
+        </div>
         {view === "admin-dashboard" && <AdminDashboard salons={salons} orders={orders} products={products} setView={setView} />}
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} />}
-        {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} />}
+        {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} setView={setView} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
+        {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
       </div>
     );
   }

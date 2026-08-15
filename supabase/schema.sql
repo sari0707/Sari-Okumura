@@ -209,7 +209,9 @@ create table if not exists bank_info (
   account_type text not null,
   account_number text not null,
   account_holder text not null,
-  deadline_days int not null default 7
+  deadline_days int not null default 7,
+  issuer_name text not null default '',
+  issuer_address text not null default ''
 );
 
 alter table bank_info enable row level security;
