@@ -51,9 +51,11 @@ const STATUS_META = {
   "入金確認済": { color: C.forestSoft, icon: CheckCircle2 },
   "発送準備中": { color: C.gold, icon: Package },
   "発送済": { color: C.forest, icon: Truck },
+  "キャンセル": { color: C.clay, icon: X },
 };
 
 const deriveOrderStatus = (o) => {
+  if (o.cancelled) return "キャンセル";
   if (o.shipStatus === "発送済") return "発送済";
   if (o.shipStatus === "発送準備中") return "発送準備中";
   if (o.paymentStatus === "入金確認済") return "入金確認済";
@@ -135,6 +137,7 @@ const mapOrder = (r) => ({
   trackingNumber: r.tracking_number || "",
   shippedAt: r.shipped_at || "",
   createdAt: fmtDate(r.created_at),
+  cancelled: !!r.cancelled_at,
 });
 const mapOrders = (rows) => (rows || []).map(mapOrder);
 
@@ -1126,6 +1129,7 @@ function OrderHistoryScreen({ salon, orders, setView }) {
 }
 
 function OrderProgress({ status }) {
+  if (status === "キャンセル") return null;
   const idx = STATUS_FLOW.indexOf(status);
   return (
     <div style={{ display: "flex", alignItems: "center", marginTop: 12 }}>
@@ -1148,10 +1152,11 @@ function OrderProgress({ status }) {
    ADMIN SCREENS
 ============================================================ */
 function AdminDashboard({ salons, orders, products, setView }) {
+  const liveOrders = orders.filter((o) => !o.cancelled);
   const pendingSalons = salons.filter((s) => s.status === "pending").length;
-  const unpaidOrders = orders.filter((o) => o.paymentStatus !== "入金確認済").length;
-  const toShip = orders.filter((o) => o.paymentStatus === "入金確認済" && o.shipStatus !== "発送済").length;
-  const revenue = orders.filter(o => o.paymentStatus === "入金確認済").reduce((s, o) => s + o.total, 0);
+  const unpaidOrders = liveOrders.filter((o) => o.paymentStatus !== "入金確認済").length;
+  const toShip = liveOrders.filter((o) => o.paymentStatus === "入金確認済" && o.shipStatus !== "発送済").length;
+  const revenue = liveOrders.filter(o => o.paymentStatus === "入金確認済").reduce((s, o) => s + o.total, 0);
 
   const stats = [
     { label: "承認待ちサロン", value: pendingSalons, icon: Building2, tone: pendingSalons > 0 ? C.clay : C.forestSoft, go: "admin-salons" },
@@ -1275,7 +1280,7 @@ function AdminSalons({ salons, updateSalon }) {
   );
 }
 
-function AdminOrders({ orders, salons, updateOrder, setView }) {
+function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
   const [filter, setFilter] = useState("all");
   const filtered = [...orders].reverse().filter((o) => filter === "all" || deriveOrderStatus(o) === filter);
 
@@ -1287,7 +1292,7 @@ function AdminOrders({ orders, salons, updateOrder, setView }) {
           border: `1px solid ${filter === "all" ? C.forest : C.line}`, background: filter === "all" ? C.forest : C.white,
           color: filter === "all" ? C.white : C.ink, borderRadius: 20, padding: "6px 14px", fontSize: 12, cursor: "pointer",
         }}>すべて</button>
-        {STATUS_FLOW.map((s) => (
+        {[...STATUS_FLOW, "キャンセル"].map((s) => (
           <button key={s} onClick={() => setFilter(s)} style={{
             border: `1px solid ${filter === s ? C.forest : C.line}`, background: filter === s ? C.forest : C.white,
             color: filter === s ? C.white : C.ink, borderRadius: 20, padding: "6px 14px", fontSize: 12, cursor: "pointer",
@@ -1311,38 +1316,60 @@ function AdminOrders({ orders, salons, updateOrder, setView }) {
                 {o.items.map((i) => `${i.name}×${i.qty}`).join("、")} ／ 合計 {yen(o.total)}
               </div>
 
-              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", background: C.ivory, borderRadius: 4, padding: 12 }}>
-                <div>
-                  <div style={{ fontSize: 10.5, color: C.inkSoft, marginBottom: 5 }}>入金状況</div>
-                  <select value={o.paymentStatus} onChange={(e) => updateOrder(o.id, { paymentStatus: e.target.value })}
-                    style={{ fontSize: 12.5, padding: "6px 8px", borderRadius: 3, border: `1px solid ${C.line}` }}>
-                    <option value="未入金">未入金</option>
-                    <option value="入金確認済">入金確認済</option>
-                  </select>
+              {o.cancelled ? (
+                <div style={{ fontSize: 12.5, color: C.clay, background: C.claySoft, borderRadius: 4, padding: 12 }}>
+                  この注文はキャンセル済みです。在庫は元に戻されています。
                 </div>
-                <div>
-                  <div style={{ fontSize: 10.5, color: C.inkSoft, marginBottom: 5 }}>発送状況</div>
-                  <select value={o.shipStatus} onChange={(e) => updateOrder(o.id, { shipStatus: e.target.value })}
-                    style={{ fontSize: 12.5, padding: "6px 8px", borderRadius: 3, border: `1px solid ${C.line}` }}>
-                    <option value="未発送">未発送</option>
-                    <option value="発送準備中">発送準備中</option>
-                    <option value="発送済">発送済</option>
-                  </select>
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap", background: C.ivory, borderRadius: 4, padding: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 10.5, color: C.inkSoft, marginBottom: 5 }}>入金状況</div>
+                      <select value={o.paymentStatus} onChange={(e) => updateOrder(o.id, { paymentStatus: e.target.value })}
+                        style={{ fontSize: 12.5, padding: "6px 8px", borderRadius: 3, border: `1px solid ${C.line}` }}>
+                        <option value="未入金">未入金</option>
+                        <option value="入金確認済">入金確認済</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10.5, color: C.inkSoft, marginBottom: 5 }}>発送状況</div>
+                      <select value={o.shipStatus} onChange={(e) => updateOrder(o.id, { shipStatus: e.target.value })}
+                        style={{ fontSize: 12.5, padding: "6px 8px", borderRadius: 3, border: `1px solid ${C.line}` }}>
+                        <option value="未発送">未発送</option>
+                        <option value="発送準備中">発送準備中</option>
+                        <option value="発送済">発送済</option>
+                      </select>
+                    </div>
+                  </div>
 
-              {o.shipStatus === "発送済" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
-                  <Input placeholder="発送日" defaultValue={o.shippedAt || todayStr()} onBlur={(e) => updateOrder(o.id, { shippedAt: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
-                  <Input placeholder="配送会社" defaultValue={o.carrier} onBlur={(e) => updateOrder(o.id, { carrier: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
-                  <Input placeholder="追跡番号" defaultValue={o.trackingNumber} onBlur={(e) => updateOrder(o.id, { trackingNumber: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
-                </div>
+                  {o.shipStatus === "発送済" && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
+                      <Input placeholder="発送日" defaultValue={o.shippedAt || todayStr()} onBlur={(e) => updateOrder(o.id, { shippedAt: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
+                      <Input placeholder="配送会社" defaultValue={o.carrier} onBlur={(e) => updateOrder(o.id, { carrier: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
+                      <Input placeholder="追跡番号" defaultValue={o.trackingNumber} onBlur={(e) => updateOrder(o.id, { trackingNumber: e.target.value })} style={{ fontSize: 12, padding: "8px 10px" }} />
+                    </div>
+                  )}
+                </>
               )}
 
-              <div style={{ marginTop: 10 }}>
+              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <Btn variant="outline" icon={Banknote} onClick={() => setView("admin-receipt", o.id)} style={{ padding: "8px 14px", fontSize: 12.5 }}>
                   領収書を発行
                 </Btn>
+                {!o.cancelled && (
+                  <Btn
+                    variant="danger"
+                    icon={X}
+                    onClick={() => {
+                      if (window.confirm(`注文 ${o.orderNumber} をキャンセルしますか？在庫が元に戻ります。`)) {
+                        cancelOrder(o.id);
+                      }
+                    }}
+                    style={{ padding: "8px 14px", fontSize: 12.5 }}
+                  >
+                    キャンセルする
+                  </Btn>
+                )}
               </div>
             </Card>
           );
@@ -1739,6 +1766,20 @@ export default function App() {
     setOrders(mapOrders(data));
   };
 
+  const cancelOrder = async (id) => {
+    const { error } = await supabase.rpc("cancel_order", { p_order_id: id });
+    if (error) {
+      alert("キャンセルに失敗しました：" + error.message);
+      return;
+    }
+    const [{ data: ordersData }, { data: productsData }] = await Promise.all([
+      supabase.from("orders").select("*").order("created_at", { ascending: true }),
+      supabase.from("products").select("*"),
+    ]);
+    setOrders(mapOrders(ordersData));
+    setProducts(mapProducts(productsData));
+  };
+
   const saveBankInfo = async (f) => {
     await supabase
       .from("bank_info")
@@ -1861,7 +1902,7 @@ export default function App() {
         </div>
         {view === "admin-dashboard" && <AdminDashboard salons={salons} orders={orders} products={products} setView={setView} />}
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} />}
-        {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} setView={setView} />}
+        {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} cancelOrder={cancelOrder} setView={setView} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
         {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}

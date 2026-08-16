@@ -136,7 +136,8 @@ create table if not exists orders (
   carrier text,
   tracking_number text,
   shipped_at text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  cancelled_at timestamptz
 );
 
 alter table orders enable row level security;
@@ -195,6 +196,41 @@ begin
   values (p_order_number, v_salon_id, p_items, p_subtotal, p_shipping, p_total)
   returning * into v_order;
 
+  return v_order;
+end;
+$$;
+
+-- Operator-only: cancel an order and put its items' quantities back into
+-- stock. Idempotent (cancelling an already-cancelled order is a no-op).
+create or replace function cancel_order(p_order_id uuid)
+returns orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_item jsonb;
+  v_order orders;
+begin
+  if not is_admin() then
+    raise exception 'only the operator can cancel orders';
+  end if;
+
+  select * into v_order from orders where id = p_order_id;
+  if v_order.id is null then
+    raise exception 'order not found';
+  end if;
+  if v_order.cancelled_at is not null then
+    return v_order;
+  end if;
+
+  for v_item in select * from jsonb_array_elements(v_order.items) loop
+    update products
+      set stock = stock + (v_item->>'qty')::int
+      where id = (v_item->>'productId')::uuid;
+  end loop;
+
+  update orders set cancelled_at = now() where id = p_order_id returning * into v_order;
   return v_order;
 end;
 $$;
