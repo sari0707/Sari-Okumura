@@ -114,6 +114,8 @@ const mapProduct = (r) => ({
   minOrderQty: r.min_order_qty,
   stock: r.stock,
   active: r.active,
+  sortOrder: r.sort_order,
+  imageUrl: r.image_url || "",
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
 
@@ -166,6 +168,8 @@ const productToDb = (patch) => {
   if ("minOrderQty" in patch) dbPatch.min_order_qty = patch.minOrderQty;
   if ("stock" in patch) dbPatch.stock = patch.stock;
   if ("active" in patch) dbPatch.active = patch.active;
+  if ("sortOrder" in patch) dbPatch.sort_order = patch.sortOrder;
+  if ("imageUrl" in patch) dbPatch.image_url = patch.imageUrl || null;
   return dbPatch;
 };
 
@@ -304,7 +308,19 @@ function EmptyState({ title, sub, icon: Icon = Package }) {
   );
 }
 
-function ProductArt({ size = 64 }) {
+function ProductArt({ size = 64, src }) {
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        style={{
+          width: size, height: size, borderRadius: 6, objectFit: "cover",
+          border: `1px solid ${C.line}`, flexShrink: 0,
+        }}
+      />
+    );
+  }
   return (
     <div style={{
       width: size, height: size, borderRadius: 6,
@@ -727,7 +743,7 @@ function TopPage({ salon, products, orders, setView }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 28 }}>
         {(newest.length ? newest : featured ? [featured] : []).map((p) => (
           <Card key={p.id} style={{ padding: 14, cursor: "pointer" }} onClick={() => setView("productDetail", p.id)}>
-            <ProductArt size={56} />
+            <ProductArt size={56} src={p.imageUrl} />
             <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, marginTop: 10, lineHeight: 1.4 }}>{p.name}</div>
             <div style={{ fontSize: 12, color: C.gold, fontWeight: 700, marginTop: 4 }}>{yen(priceFor(p, salon))}〜</div>
           </Card>
@@ -775,7 +791,7 @@ function ProductListScreen({ products, cart, setCart, salon, setView }) {
         {activeProducts.map((p) => (
           <Card key={p.id} style={{ padding: 16 }}>
             <div style={{ display: "flex", gap: 14 }} onClick={() => setView("productDetail", p.id)}>
-              <ProductArt size={72} />
+              <ProductArt size={72} src={p.imageUrl} />
               <div style={{ flex: 1, cursor: "pointer" }}>
                 <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 15.5, color: C.ink, marginBottom: 3 }}>{p.name}</div>
                 <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>{p.volume}</div>
@@ -833,7 +849,7 @@ function ProductDetailScreen({ product, setCart, salon, setView }) {
         <ChevronLeft size={16} /> 商品一覧へ戻る
       </button>
       <div style={{ display: "flex", justifyContent: "center", marginBottom: 22 }}>
-        <ProductArt size={160} />
+        <ProductArt size={160} src={product.imageUrl} />
       </div>
       <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 21, color: C.ink, marginBottom: 4 }}>{product.name}</div>
       <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 14 }}>{product.volume}</div>
@@ -879,7 +895,7 @@ function calcCartTotals(cart, products, salon) {
     const p = products.find((pp) => pp.id === c.productId);
     if (!p) return null;
     const unitPrice = priceFor(p, salon);
-    return { productId: p.id, name: p.name, unitPrice, qty: c.qty, subtotal: unitPrice * c.qty };
+    return { productId: p.id, name: p.name, imageUrl: p.imageUrl, unitPrice, qty: c.qty, subtotal: unitPrice * c.qty };
   }).filter(Boolean);
   const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
   const shipping = subtotal === 0 || subtotal >= FREE_SHIP_THRESHOLD ? 0 : SHIPPING_FEE;
@@ -903,7 +919,7 @@ function CartScreen({ cart, setCart, products, salon, setView }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 22 }}>
             {items.map((i) => (
               <Card key={i.productId} style={{ padding: 14, display: "flex", gap: 12, alignItems: "center" }}>
-                <ProductArt size={52} />
+                <ProductArt size={52} src={i.imageUrl} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, marginBottom: 4 }}>{i.name}</div>
                   <div style={{ fontSize: 12, color: C.inkSoft }}>単価 {yen(i.unitPrice)}</div>
@@ -1442,7 +1458,7 @@ function ReceiptScreen({ order, salon, bankInfo, setView }) {
   );
 }
 
-function AdminProducts({ products, updateProduct, addProduct }) {
+function AdminProducts({ products, updateProduct, addProduct, moveProduct }) {
   const [editing, setEditing] = useState(null);
   const [creating, setCreating] = useState(false);
 
@@ -1460,7 +1476,7 @@ function AdminProducts({ products, updateProduct, addProduct }) {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {products.map((p) => (
+        {products.map((p, idx) => (
           <Card key={p.id} style={{ padding: 16 }}>
             {editing === p.id ? (
               <ProductEditForm
@@ -1470,7 +1486,23 @@ function AdminProducts({ products, updateProduct, addProduct }) {
               />
             ) : (
               <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                <ProductArt size={56} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <button
+                    onClick={() => moveProduct(p.id, "up")}
+                    disabled={idx === 0}
+                    style={{ border: `1px solid ${C.line}`, background: C.white, borderRadius: 3, padding: "2px 6px", cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.35 : 1, fontSize: 11, lineHeight: 1.4 }}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => moveProduct(p.id, "down")}
+                    disabled={idx === products.length - 1}
+                    style={{ border: `1px solid ${C.line}`, background: C.white, borderRadius: 3, padding: "2px 6px", cursor: idx === products.length - 1 ? "default" : "pointer", opacity: idx === products.length - 1 ? 0.35 : 1, fontSize: 11, lineHeight: 1.4 }}
+                  >
+                    ↓
+                  </button>
+                </div>
+                <ProductArt size={56} src={p.imageUrl} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: 13.5 }}>{p.name}</div>
                   <div style={{ fontSize: 11.5, color: C.inkSoft }}>{p.volume}</div>
@@ -1503,12 +1535,51 @@ function ProductEditForm({ initial, onSave, onCancel }) {
     name: "", volume: "", description: "", generalPrice: 0, wholesalePrice: 0, minOrderQty: 1, stock: 0, active: true,
     ...initial,
     partnerPrice: initial?.partnerPrice ?? "",
+    imageUrl: initial?.imageUrl || "",
   });
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setNum = (k) => (e) => setF({ ...f, [k]: Number(e.target.value) });
 
+  const handleImageChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadError("");
+    const ext = file.name.split(".").pop();
+    const path = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error } = await supabase.storage.from("product-images").upload(path, file);
+    setUploading(false);
+    if (error) {
+      setUploadError("画像のアップロードに失敗しました。");
+      return;
+    }
+    const { data } = supabase.storage.from("product-images").getPublicUrl(path);
+    setF((prev) => ({ ...prev, imageUrl: data.publicUrl }));
+  };
+
   return (
     <Card style={{ padding: 18, marginBottom: 16, background: C.sage, border: "none" }}>
+      <Field label="商品画像">
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ProductArt size={64} src={f.imageUrl} />
+          <div>
+            <input type="file" accept="image/*" onChange={handleImageChange} disabled={uploading} style={{ fontSize: 12.5 }} />
+            {uploading && <div style={{ fontSize: 11.5, color: C.inkSoft, marginTop: 4 }}>アップロード中…</div>}
+            {uploadError && <div style={{ fontSize: 11.5, color: C.clay, marginTop: 4 }}>{uploadError}</div>}
+            {f.imageUrl && (
+              <button
+                type="button"
+                onClick={() => setF((prev) => ({ ...prev, imageUrl: "" }))}
+                style={{ background: "none", border: "none", color: C.clay, fontSize: 11.5, cursor: "pointer", padding: 0, marginTop: 4 }}
+              >
+                画像を削除
+              </button>
+            )}
+          </div>
+        </div>
+      </Field>
       <Field label="商品名"><Input value={f.name} onChange={set("name")} /></Field>
       <Field label="内容量"><Input value={f.volume} onChange={set("volume")} /></Field>
       <Field label="商品説明"><TextArea value={f.description} onChange={set("description")} /></Field>
@@ -1522,7 +1593,7 @@ function ProductEditForm({ initial, onSave, onCancel }) {
         <Field label="在庫数"><Input type="number" value={f.stock} onChange={setNum("stock")} /></Field>
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-        <Btn onClick={() => onSave({ ...f, partnerPrice: f.partnerPrice === "" ? "" : Number(f.partnerPrice) })}>保存する</Btn>
+        <Btn disabled={uploading} onClick={() => onSave({ ...f, partnerPrice: f.partnerPrice === "" ? "" : Number(f.partnerPrice) })}>保存する</Btn>
         <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
       </div>
     </Card>
@@ -1648,7 +1719,7 @@ export default function App() {
         const [{ data: salonsData }, { data: ordersData }, { data: productsData }, { data: bankData }] = await Promise.all([
           supabase.from("salons").select("*").order("registered_at", { ascending: true }),
           supabase.from("orders").select("*").order("created_at", { ascending: true }),
-          supabase.from("products").select("*"),
+          supabase.from("products").select("*").order("sort_order"),
           supabase.from("bank_info").select("*").maybeSingle(),
         ]);
         if (cancelled) return;
@@ -1693,7 +1764,7 @@ export default function App() {
 
       const [{ data: ordersData }, { data: productsData }, { data: bankData }] = await Promise.all([
         supabase.from("orders").select("*").eq("salon_id", salonRow.id).order("created_at", { ascending: true }),
-        supabase.from("products").select("*").eq("active", true),
+        supabase.from("products").select("*").eq("active", true).order("sort_order"),
         supabase.from("bank_info").select("*").maybeSingle(),
       ]);
       if (cancelled) return;
@@ -1750,14 +1821,31 @@ export default function App() {
 
   const updateProduct = async (id, patch) => {
     await supabase.from("products").update(productToDb(patch)).eq("id", id);
-    const { data } = await supabase.from("products").select("*");
+    const { data } = await supabase.from("products").select("*").order("sort_order");
     setProducts(mapProducts(data));
   };
 
   const addProduct = async (data) => {
-    await supabase.from("products").insert(productToDb(data));
-    const { data: rows } = await supabase.from("products").select("*");
+    const maxOrder = products.reduce((m, p) => Math.max(m, p.sortOrder ?? 0), 0);
+    await supabase.from("products").insert({ ...productToDb(data), sort_order: maxOrder + 1 });
+    const { data: rows } = await supabase.from("products").select("*").order("sort_order");
     setProducts(mapProducts(rows));
+  };
+
+  // Renumbers the whole list to the swapped order (rather than swapping the
+  // two sort_order values directly) so it self-heals from ties - every
+  // existing product defaults to sort_order 0 until moved at least once.
+  const moveProduct = async (id, direction) => {
+    const idx = products.findIndex((p) => p.id === id);
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= products.length) return;
+    const reordered = [...products];
+    [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+    await Promise.all(
+      reordered.map((p, i) => supabase.from("products").update({ sort_order: i }).eq("id", p.id))
+    );
+    const { data } = await supabase.from("products").select("*").order("sort_order");
+    setProducts(mapProducts(data));
   };
 
   const updateOrder = async (id, patch) => {
@@ -1774,7 +1862,7 @@ export default function App() {
     }
     const [{ data: ordersData }, { data: productsData }] = await Promise.all([
       supabase.from("orders").select("*").order("created_at", { ascending: true }),
-      supabase.from("products").select("*"),
+      supabase.from("products").select("*").order("sort_order"),
     ]);
     setOrders(mapOrders(ordersData));
     setProducts(mapProducts(productsData));
@@ -1812,7 +1900,7 @@ export default function App() {
     }
     const newOrder = mapOrder(data);
     setOrders((prev) => [...prev, newOrder]);
-    const { data: productsData } = await supabase.from("products").select("*").eq("active", true);
+    const { data: productsData } = await supabase.from("products").select("*").eq("active", true).order("sort_order");
     setProducts(mapProducts(productsData));
     setCart([]);
     setLastOrderId(newOrder.id);
@@ -1903,7 +1991,7 @@ export default function App() {
         {view === "admin-dashboard" && <AdminDashboard salons={salons} orders={orders} products={products} setView={setView} />}
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} />}
         {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} cancelOrder={cancelOrder} setView={setView} />}
-        {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} />}
+        {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
         {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
       </div>

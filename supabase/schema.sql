@@ -103,7 +103,9 @@ create table if not exists products (
   partner_price numeric,
   min_order_qty int not null default 1,
   stock int not null default 0,
-  active boolean not null default true
+  active boolean not null default true,
+  sort_order int not null default 0,
+  image_url text
 );
 
 alter table products enable row level security;
@@ -288,3 +290,29 @@ create or replace view public_salon_directory as
   select id, salon_name, email from salons where status = 'approved';
 
 grant select on public_salon_directory to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- product-images: public bucket for product photos, admin-managed.
+-- ---------------------------------------------------------------------------
+insert into storage.buckets (id, name, public)
+values ('product-images', 'product-images', true)
+on conflict (id) do nothing;
+
+create policy "public can view product images"
+  on storage.objects for select
+  using (bucket_id = 'product-images');
+
+create policy "admin can upload product images"
+  on storage.objects for insert
+  to authenticated
+  with check (bucket_id = 'product-images' and public.is_admin());
+
+create policy "admin can replace product images"
+  on storage.objects for update
+  to authenticated
+  using (bucket_id = 'product-images' and public.is_admin());
+
+create policy "admin can delete product images"
+  on storage.objects for delete
+  to authenticated
+  using (bucket_id = 'product-images' and public.is_admin());
