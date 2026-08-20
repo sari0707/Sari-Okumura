@@ -281,15 +281,46 @@ on conflict do nothing;
 -- ---------------------------------------------------------------------------
 -- public_salon_directory: lets the (password-gated, but unauthenticated)
 -- login screen list approved salon names to pick from, and looks up the
--- email needed to actually sign in with the shared salon password. Owned by
--- the table owner, so it reads through RLS on `salons` once, at view-creation
--- time, rather than per request — the standard Postgres/Supabase pattern for
+-- email needed to actually sign in with the shared salon/partner password.
+-- account_type is included so the app can show salons only the salon
+-- password and partners only the partner password. Owned by the table
+-- owner, so it reads through RLS on `salons` once, at view-creation time,
+-- rather than per request — the standard Postgres/Supabase pattern for
 -- exposing a narrow, filtered slice of an RLS-protected table.
 -- ---------------------------------------------------------------------------
 create or replace view public_salon_directory as
-  select id, salon_name, email from salons where status = 'approved';
+  select id, salon_name, email, account_type from salons where status = 'approved';
 
 grant select on public_salon_directory to anon, authenticated;
+
+-- Operator-only: re-hash a salon's Supabase Auth password in place (e.g.
+-- when its account_type flips between 'salon' and 'partner', each of which
+-- has its own shared password). Matches by email rather than salons.user_id
+-- because a freshly-registered-but-not-yet-approved salon may not have
+-- logged in (and claimed user_id) yet.
+create or replace function admin_set_salon_password(p_salon_id uuid, p_new_password text)
+returns void
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+declare
+  v_email text;
+begin
+  if not is_admin() then
+    raise exception 'only the operator can do this';
+  end if;
+
+  select email into v_email from salons where id = p_salon_id;
+  if v_email is null then
+    raise exception 'salon not found';
+  end if;
+
+  update auth.users
+    set encrypted_password = crypt(p_new_password, gen_salt('bf'))
+    where email = v_email;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- product-images: public bucket for product photos, admin-managed.

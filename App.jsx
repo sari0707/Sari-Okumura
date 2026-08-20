@@ -9,6 +9,7 @@ import {
 import { supabase } from "./src/supabaseClient.js";
 
 const SALON_SHARED_PASSWORD = import.meta.env.VITE_SALON_SHARED_PASSWORD || "";
+const PARTNER_SHARED_PASSWORD = import.meta.env.VITE_PARTNER_SHARED_PASSWORD || "";
 
 /* ============================================================
    BRAND TOKENS
@@ -481,15 +482,22 @@ function LoginScreen({ goRegister }) {
 
   const submitSalonPassword = async () => {
     setError("");
-    if (salonPassword !== SALON_SHARED_PASSWORD) {
+    let accountType;
+    if (SALON_SHARED_PASSWORD && salonPassword === SALON_SHARED_PASSWORD) accountType = "salon";
+    else if (PARTNER_SHARED_PASSWORD && salonPassword === PARTNER_SHARED_PASSWORD) accountType = "partner";
+    else {
       setError("パスワードが正しくありません。");
       return;
     }
     setSending(true);
-    const { data, error: err } = await supabase.from("public_salon_directory").select("*").order("salon_name");
+    const { data, error: err } = await supabase
+      .from("public_salon_directory")
+      .select("*")
+      .eq("account_type", accountType)
+      .order("salon_name");
     setSending(false);
     if (err || !data || data.length === 0) {
-      setError("サロン一覧の取得に失敗しました。時間をおいて再度お試しください。");
+      setError("該当するサロンが見つかりませんでした。運営者にご確認ください。");
       return;
     }
     setSalonList(data);
@@ -1815,6 +1823,12 @@ export default function App() {
     if ("status" in patch) dbPatch.status = patch.status;
     if ("partnerAccount" in patch) dbPatch.account_type = patch.partnerAccount ? "partner" : "salon";
     await supabase.from("salons").update(dbPatch).eq("id", id);
+    if ("partnerAccount" in patch) {
+      // Keep the salon's login password in sync with its new category, since
+      // salons and 営業パートナー each have their own shared password.
+      const newPassword = patch.partnerAccount ? PARTNER_SHARED_PASSWORD : SALON_SHARED_PASSWORD;
+      await supabase.rpc("admin_set_salon_password", { p_salon_id: id, p_new_password: newPassword });
+    }
     const { data } = await supabase.from("salons").select("*").order("registered_at", { ascending: true });
     setSalons(mapSalons(data));
   };
