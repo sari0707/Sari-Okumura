@@ -1827,9 +1827,11 @@ export default function App() {
       // Keep the salon's login password in sync with its new category, since
       // salons and 営業パートナー each have their own shared password.
       const newPassword = patch.partnerAccount ? PARTNER_SHARED_PASSWORD : SALON_SHARED_PASSWORD;
-      const { error: pwError } = await supabase.rpc("admin_set_salon_password", { p_salon_id: id, p_new_password: newPassword });
+      const { data: pwResult, error: pwError } = await supabase.rpc("admin_set_salon_password", { p_salon_id: id, p_new_password: newPassword });
       if (pwError) {
         alert("パスワードの再設定に失敗しました：" + pwError.message);
+      } else {
+        alert("パスワード再設定：" + pwResult);
       }
     }
     const { data } = await supabase.from("salons").select("*").order("registered_at", { ascending: true });
