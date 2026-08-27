@@ -1234,7 +1234,7 @@ function AdminSalons({ salons, updateSalon }) {
     <Screen maxWidth={860}>
       <SectionTitle eyebrow="ADMIN" title="サロン管理" />
       <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-        {[["all", "すべて"], ["pending", "承認待ち"], ["approved", "承認済"]].map(([k, label]) => (
+        {[["all", "すべて"], ["pending", "承認待ち"], ["approved", "承認済"], ["rejected", "却下"]].map(([k, label]) => (
           <button key={k} onClick={() => setFilter(k)} style={{
             border: `1px solid ${filter === k ? C.forest : C.line}`, background: filter === k ? C.forest : C.white,
             color: filter === k ? C.white : C.ink, borderRadius: 20, padding: "6px 14px", fontSize: 12, cursor: "pointer",
@@ -1264,7 +1264,7 @@ function AdminSalons({ salons, updateSalon }) {
                 background: s.status === "approved" ? C.forest + "18" : C.clay + "18",
                 color: s.status === "approved" ? C.forestSoft : C.clay,
               }}>
-                {s.status === "approved" ? "承認済" : "未承認"}
+                {s.status === "approved" ? "承認済" : s.status === "rejected" ? "却下" : "未承認"}
               </span>
             </div>
 
@@ -1287,11 +1287,28 @@ function AdminSalons({ salons, updateSalon }) {
                     <option value="partner">営業パートナー</option>
                   </select>
                 </div>
-                <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                  {s.status !== "approved" ? (
-                    <Btn onClick={() => updateSalon(s.id, { status: "approved" })} icon={CheckCircle2}>承認する</Btn>
-                  ) : (
+                <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+                  {s.status === "pending" && (
+                    <>
+                      <Btn onClick={() => updateSalon(s.id, { status: "approved" })} icon={CheckCircle2}>承認する</Btn>
+                      <Btn
+                        variant="danger"
+                        icon={X}
+                        onClick={() => {
+                          if (window.confirm(`${s.salonName} を却下しますか？`)) {
+                            updateSalon(s.id, { status: "rejected" });
+                          }
+                        }}
+                      >
+                        承認しない
+                      </Btn>
+                    </>
+                  )}
+                  {s.status === "approved" && (
                     <Btn variant="outline" onClick={() => updateSalon(s.id, { status: "pending" })}>承認を取り消す</Btn>
+                  )}
+                  {s.status === "rejected" && (
+                    <Btn variant="outline" onClick={() => updateSalon(s.id, { status: "pending" })}>承認待ちに戻す</Btn>
                   )}
                 </div>
               </div>
@@ -1763,6 +1780,12 @@ export default function App() {
         setLoading(false);
         return;
       }
+      if (salonRow.status === "rejected") {
+        setRole("salon-rejected");
+        setSalon(mapSalon(salonRow));
+        setLoading(false);
+        return;
+      }
       if (salonRow.status !== "approved") {
         setRole("salon-pending");
         setSalon(mapSalon(salonRow));
@@ -1991,6 +2014,23 @@ export default function App() {
           <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 18, marginBottom: 10 }}>承認をお待ちください</div>
           <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8, marginBottom: 24 }}>
             ご登録ありがとうございます。現在、運営者による承認をお待ちいただいております。
+          </div>
+          <Btn full onClick={doLogout}>ログアウト</Btn>
+        </Card>
+      </div>
+    );
+  }
+
+  // Registration was reviewed and declined.
+  if (role === "salon-rejected") {
+    return (
+      <div style={{ minHeight: "100vh", background: C.ivory, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        {style}
+        <Card style={{ padding: 32, textAlign: "center", maxWidth: 400 }}>
+          <X size={32} color={C.clay} style={{ marginBottom: 14 }} />
+          <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 18, marginBottom: 10 }}>登録が承認されませんでした</div>
+          <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8, marginBottom: 24 }}>
+            今回のご登録は承認されませんでした。ご不明な点は運営者へお問い合わせください。
           </div>
           <Btn full onClick={doLogout}>ログアウト</Btn>
         </Card>

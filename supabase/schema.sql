@@ -53,7 +53,7 @@ create table if not exists salons (
   salon_url text,
   desired_products text,
   notes text,
-  status text not null default 'pending' check (status in ('pending', 'approved')),
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   account_type text not null default 'salon' check (account_type in ('salon', 'partner')),
   registered_at timestamptz not null default now()
 );
