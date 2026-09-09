@@ -8,9 +8,6 @@ import {
 } from "lucide-react";
 import { supabase } from "./src/supabaseClient.js";
 
-const SALON_SHARED_PASSWORD = import.meta.env.VITE_SALON_SHARED_PASSWORD || "";
-const PARTNER_SHARED_PASSWORD = import.meta.env.VITE_PARTNER_SHARED_PASSWORD || "";
-
 /* ============================================================
    BRAND TOKENS
    forest: #2D4A35 / forest-deep:#1F3527 / gold:#C9A84C
@@ -100,6 +97,7 @@ const mapSalon = (r) => ({
   notes: r.notes || "",
   status: r.status,
   partnerAccount: r.account_type === "partner",
+  loginCode: r.login_code || "",
   registeredAt: fmtDate(r.registered_at),
 });
 const mapSalons = (rows) => (rows || []).map(mapSalon);
@@ -471,51 +469,26 @@ function SectionTitle({ eyebrow, title, right }) {
 ============================================================ */
 function LoginScreen({ goRegister }) {
   const [mode, setMode] = useState("salon"); // "salon" | "admin"
-  const [salonStep, setSalonStep] = useState("password"); // "password" | "pick"
-  const [salonPassword, setSalonPassword] = useState("");
-  const [salonList, setSalonList] = useState([]);
-  const [selectedSalonId, setSelectedSalonId] = useState("");
+  const [loginCode, setLoginCode] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
 
-  const submitSalonPassword = async () => {
-    setError("");
-    let accountType;
-    if (SALON_SHARED_PASSWORD && salonPassword === SALON_SHARED_PASSWORD) accountType = "salon";
-    else if (PARTNER_SHARED_PASSWORD && salonPassword === PARTNER_SHARED_PASSWORD) accountType = "partner";
-    else {
-      setError("パスワードが正しくありません。");
-      return;
-    }
-    setSending(true);
-    const { data, error: err } = await supabase
-      .from("public_salon_directory")
-      .select("*")
-      .eq("account_type", accountType)
-      .order("salon_name");
-    setSending(false);
-    if (err || !data || data.length === 0) {
-      setError("該当するサロンが見つかりませんでした。運営者にご確認ください。");
-      return;
-    }
-    setSalonList(data);
-    setSelectedSalonId(data[0].id);
-    setSalonStep("pick");
-  };
-
   const submitSalonLogin = async () => {
     setError("");
-    const picked = salonList.find((s) => s.id === selectedSalonId);
-    if (!picked) return;
+    if (!loginCode.trim()) return;
     setSending(true);
-    const { error: err } = await supabase.auth.signInWithPassword({
-      email: picked.email,
-      password: salonPassword,
-    });
+    const code = loginCode.trim();
+    const { data: foundEmail, error: lookupErr } = await supabase.rpc("find_salon_email_by_code", { p_code: code });
+    if (lookupErr || !foundEmail) {
+      setSending(false);
+      setError("コードが正しくないか、まだ承認されていません。運営者にご確認ください。");
+      return;
+    }
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email: foundEmail, password: code });
     setSending(false);
-    if (err) {
+    if (authErr) {
       setError("ログインに失敗しました。運営者にご確認ください。");
     }
   };
@@ -546,59 +519,28 @@ function LoginScreen({ goRegister }) {
       <div style={{ maxWidth: 420, margin: "0 auto", padding: "0 20px 40px" }}>
         <Card style={{ padding: 28, boxShadow: "0 10px 30px rgba(27,46,34,0.18)" }}>
           {mode === "salon" ? (
-            salonStep === "password" ? (
-              <>
-                <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
-                  取扱店共通のパスワードを入力してください。
+            <>
+              <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
+                ご自身のログインコードを入力してください。
+              </div>
+              <Field label="ログインコード" required>
+                <Input placeholder="yomogi001" value={loginCode}
+                  onChange={(e) => setLoginCode(e.target.value)} />
+              </Field>
+              {error && (
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: C.claySoft, color: C.clay, padding: "10px 12px", borderRadius: 4, fontSize: 12.5, marginBottom: 16, lineHeight: 1.6 }}>
+                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
                 </div>
-                <Field label="パスワード" required>
-                  <Input type="password" placeholder="••••••••" value={salonPassword}
-                    onChange={(e) => setSalonPassword(e.target.value)} />
-                </Field>
-                {error && (
-                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: C.claySoft, color: C.clay, padding: "10px 12px", borderRadius: 4, fontSize: 12.5, marginBottom: 16, lineHeight: 1.6 }}>
-                    <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
-                  </div>
-                )}
-                <Btn full icon={Lock} onClick={submitSalonPassword} disabled={sending}>
-                  {sending ? "確認中…" : "次へ"}
-                </Btn>
-                <div style={{ textAlign: "center", marginTop: 18 }}>
-                  <button onClick={goRegister} style={{ background: "none", border: "none", color: C.forest, fontWeight: 700, fontSize: 13.5, cursor: "pointer", textDecoration: "underline" }}>
-                    取扱店登録はこちら
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 20, lineHeight: 1.7 }}>
-                  ご自身のサロンを選択してください。
-                </div>
-                <Field label="サロン名" required>
-                  <select
-                    value={selectedSalonId}
-                    onChange={(e) => setSelectedSalonId(e.target.value)}
-                    style={inputStyle}
-                  >
-                    {salonList.map((s) => (
-                      <option key={s.id} value={s.id}>{s.salon_name}</option>
-                    ))}
-                  </select>
-                </Field>
-                {error && <div style={{ color: C.clay, fontSize: 12.5, marginBottom: 14 }}>{error}</div>}
-                <Btn full icon={Lock} onClick={submitSalonLogin} disabled={sending}>
-                  {sending ? "ログイン中…" : "ログイン"}
-                </Btn>
-                <div style={{ textAlign: "center", marginTop: 18 }}>
-                  <button
-                    onClick={() => { setSalonStep("password"); setError(""); }}
-                    style={{ background: "none", border: "none", color: C.inkSoft, fontSize: 12.5, cursor: "pointer" }}
-                  >
-                    ← パスワード入力へ戻る
-                  </button>
-                </div>
-              </>
-            )
+              )}
+              <Btn full icon={Lock} onClick={submitSalonLogin} disabled={sending}>
+                {sending ? "ログイン中…" : "ログイン"}
+              </Btn>
+              <div style={{ textAlign: "center", marginTop: 18 }}>
+                <button onClick={goRegister} style={{ background: "none", border: "none", color: C.forest, fontWeight: 700, fontSize: 13.5, cursor: "pointer", textDecoration: "underline" }}>
+                  取扱店登録はこちら
+                </button>
+              </div>
+            </>
           ) : (
             <>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.forest, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>
@@ -617,7 +559,7 @@ function LoginScreen({ goRegister }) {
 
           <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 22, paddingTop: 16, textAlign: "center" }}>
             <button
-              onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setSalonStep("password"); setError(""); }}
+              onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setError(""); }}
               style={{ background: "none", border: "none", color: C.inkSoft, fontSize: 12, cursor: "pointer" }}
             >
               {mode === "admin" ? "← サロン用ログインへ戻る" : "運営者の方はこちら"}
@@ -635,6 +577,7 @@ function RegisterScreen({ onSubmit, goLogin }) {
     instagram: "", salonUrl: "", desiredProducts: "", notes: "",
   });
   const [done, setDone] = useState(false);
+  const [assignedCode, setAssignedCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -644,7 +587,7 @@ function RegisterScreen({ onSubmit, goLogin }) {
   const handleSubmit = async () => {
     setSubmitting(true);
     setSubmitError("");
-    const { error } = await onSubmit(form);
+    const { error, loginCode } = await onSubmit(form);
     setSubmitting(false);
     if (error) {
       setSubmitError(
@@ -654,6 +597,7 @@ function RegisterScreen({ onSubmit, goLogin }) {
       );
       return;
     }
+    setAssignedCode(loginCode || "");
     setDone(true);
   };
 
@@ -663,8 +607,16 @@ function RegisterScreen({ onSubmit, goLogin }) {
         <Card style={{ padding: 36, textAlign: "center", maxWidth: 400 }}>
           <CheckCircle2 size={38} color={C.forest} style={{ marginBottom: 14 }} />
           <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 19, marginBottom: 10 }}>ご登録ありがとうございます</div>
+          {assignedCode && (
+            <div style={{ background: C.sage, borderRadius: 4, padding: 16, marginBottom: 20 }}>
+              <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>あなたのログインコード</div>
+              <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 22, fontWeight: 700, color: C.forest, letterSpacing: "0.05em" }}>
+                {assignedCode}
+              </div>
+            </div>
+          )}
           <div style={{ fontSize: 13, color: C.inkSoft, lineHeight: 1.8, marginBottom: 24 }}>
-            運営者の承認後、ログインいただけるようになります。承認まで今しばらくお待ちください。
+            運営者の承認後、上記のログインコードでログインいただけるようになります。忘れないようスクリーンショット等で保管してください。承認まで今しばらくお待ちください。
           </div>
           <Btn full onClick={goLogin}>ログイン画面へ戻る</Btn>
         </Card>
@@ -1270,6 +1222,7 @@ function AdminSalons({ salons, updateSalon }) {
 
             {expanded === s.id && (
               <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.line}`, fontSize: 12.5, color: C.ink, lineHeight: 2 }}>
+                <div>ログインコード：<b>{s.loginCode || "（未発行）"}</b></div>
                 <div>電話：{s.phone}</div>
                 <div>住所：〒{s.zip} {s.address}</div>
                 {s.instagram && <div>Instagram：{s.instagram}</div>}
@@ -1817,28 +1770,26 @@ export default function App() {
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
 
   const registerSalon = async (form) => {
-    const { error: signUpErr } = await supabase.auth.signUp({
-      email: form.email,
-      password: SALON_SHARED_PASSWORD,
+    const { data: salonRow, error } = await supabase.rpc("register_salon", {
+      p_salon_name: form.salonName,
+      p_contact_name: form.contactName,
+      p_email: form.email,
+      p_phone: form.phone,
+      p_zip: form.zip,
+      p_address: form.address,
+      p_instagram: form.instagram,
+      p_salon_url: form.salonUrl,
+      p_desired_products: form.desiredProducts,
+      p_notes: form.notes,
     });
-    if (signUpErr) return { error: signUpErr };
+    if (error) return { error };
 
-    const { error } = await supabase.from("salons").insert({
-      salon_name: form.salonName,
-      contact_name: form.contactName,
-      email: form.email,
-      phone: form.phone,
-      zip: form.zip,
-      address: form.address,
-      instagram: form.instagram,
-      salon_url: form.salonUrl,
-      desired_products: form.desiredProducts,
-      notes: form.notes,
-    });
+    const loginCode = salonRow.login_code;
+    const { error: signUpErr } = await supabase.auth.signUp({ email: form.email, password: loginCode });
     // signUp() logs this browser in immediately; sign back out so the guest
     // stays on the registration confirmation screen until an admin approves.
     await supabase.auth.signOut();
-    return { error };
+    return { error: signUpErr, loginCode };
   };
 
   const updateSalon = async (id, patch) => {
@@ -1846,17 +1797,6 @@ export default function App() {
     if ("status" in patch) dbPatch.status = patch.status;
     if ("partnerAccount" in patch) dbPatch.account_type = patch.partnerAccount ? "partner" : "salon";
     await supabase.from("salons").update(dbPatch).eq("id", id);
-    if ("partnerAccount" in patch) {
-      // Keep the salon's login password in sync with its new category, since
-      // salons and 営業パートナー each have their own shared password.
-      const newPassword = patch.partnerAccount ? PARTNER_SHARED_PASSWORD : SALON_SHARED_PASSWORD;
-      const { data: pwResult, error: pwError } = await supabase.rpc("admin_set_salon_password", { p_salon_id: id, p_new_password: newPassword });
-      if (pwError) {
-        alert("パスワードの再設定に失敗しました：" + pwError.message);
-      } else {
-        alert("パスワード再設定：" + pwResult);
-      }
-    }
     const { data } = await supabase.from("salons").select("*").order("registered_at", { ascending: true });
     setSalons(mapSalons(data));
   };

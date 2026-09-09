@@ -2,9 +2,14 @@
 -- Run this once in the Supabase project's SQL Editor (or via `supabase db push`).
 --
 -- Auth model:
---   - Salons sign in with a passwordless email magic link (supabase.auth.signInWithOtp).
---     A `salons` row is created at registration time (status='pending'); it gets linked
---     to the auth user (user_id) the first time that person actually logs in.
+--   - Each salon gets its own permanent login_code (e.g. yomogi001), assigned
+--     automatically at registration and used as both its identifier and its
+--     Supabase Auth password (set via signUp() right after register_salon()
+--     returns it). Logging in is just "type your code" - find_salon_email_by_code()
+--     resolves it to an email, then the app calls signInWithPassword(). A
+--     `salons` row is created at registration time (status='pending'); it
+--     gets linked to the auth user (user_id) the first time that person
+--     actually logs in.
 --   - The admin signs in with Supabase Auth email+password. There is no public admin
 --     sign-up: create the admin's auth user by hand in the Supabase dashboard
 --     (Authentication > Users > Add user), then add their email to `admins` below.
@@ -55,12 +60,48 @@ create table if not exists salons (
   notes text,
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   account_type text not null default 'salon' check (account_type in ('salon', 'partner')),
+  login_code text unique,
   registered_at timestamptz not null default now()
 );
 
 alter table salons enable row level security;
 
--- Public registration form: anyone can create a pending salon row.
+-- Each salon's own permanent, individual login code (e.g. yomogi001),
+-- assigned automatically on registration - also used as its Supabase Auth
+-- password, so there is nothing to keep in sync when account_type changes
+-- and no shared list of names for one salon to browse another's info in.
+create sequence if not exists salon_login_code_seq;
+
+create or replace function generate_salon_login_code()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.login_code is null then
+    new.login_code := 'yomogi' || lpad(nextval('salon_login_code_seq')::text, 3, '0');
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_salon_login_code on salons;
+create trigger trg_salon_login_code
+  before insert on salons
+  for each row execute function generate_salon_login_code();
+
+-- One-time backfill for salons registered before login_code existed,
+-- assigned in registration order, then advance the sequence past them.
+with numbered as (
+  select id, row_number() over (order by registered_at) as rn
+  from salons where login_code is null
+)
+update salons s set login_code = 'yomogi' || lpad(numbered.rn::text, 3, '0')
+from numbered where s.id = numbered.id;
+
+select setval('salon_login_code_seq', (select count(*) from salons where login_code is not null));
+
+-- Public registration form: anyone can create a pending salon row. Prefer
+-- the register_salon() RPC below, which also returns the assigned code.
 create policy "anyone can register a salon"
   on salons for insert
   to anon, authenticated
@@ -278,49 +319,56 @@ values (
 )
 on conflict do nothing;
 
--- ---------------------------------------------------------------------------
--- public_salon_directory: lets the (password-gated, but unauthenticated)
--- login screen list approved salon names to pick from, and looks up the
--- email needed to actually sign in with the shared salon/partner password.
--- account_type is included so the app can show salons only the salon
--- password and partners only the partner password. Owned by the table
--- owner, so it reads through RLS on `salons` once, at view-creation time,
--- rather than per request — the standard Postgres/Supabase pattern for
--- exposing a narrow, filtered slice of an RLS-protected table.
--- ---------------------------------------------------------------------------
-create or replace view public_salon_directory as
-  select id, salon_name, email, account_type from salons where status = 'approved';
+-- Superseded by each salon's individual login_code: no more shared
+-- password bucketed by account_type, so nothing to browse and nothing to
+-- keep in sync when a salon's type changes.
+drop view if exists public_salon_directory;
+drop function if exists admin_set_salon_password(uuid, text);
 
-grant select on public_salon_directory to anon, authenticated;
-
--- Operator-only: re-hash a salon's Supabase Auth password in place (e.g.
--- when its account_type flips between 'salon' and 'partner', each of which
--- has its own shared password). Matches by email rather than salons.user_id
--- because a freshly-registered-but-not-yet-approved salon may not have
--- logged in (and claimed user_id) yet.
-create or replace function admin_set_salon_password(p_salon_id uuid, p_new_password text)
-returns void
+-- ---------------------------------------------------------------------------
+-- register_salon: creates the pending salon row and hands back its
+-- auto-assigned login_code in one call. A plain client-side insert can't do
+-- this and read the row back in the same request (the registrant isn't
+-- authenticated yet, so RLS wouldn't let an anon insert select its own new
+-- row); running as security definer sidesteps that.
+-- ---------------------------------------------------------------------------
+create or replace function register_salon(
+  p_salon_name text, p_contact_name text, p_email text, p_phone text,
+  p_zip text, p_address text, p_instagram text, p_salon_url text,
+  p_desired_products text, p_notes text
+)
+returns salons
 language plpgsql
 security definer
-set search_path = public, auth, extensions
+set search_path = public
 as $$
 declare
-  v_email text;
+  v_salon salons;
 begin
-  if not is_admin() then
-    raise exception 'only the operator can do this';
-  end if;
-
-  select email into v_email from salons where id = p_salon_id;
-  if v_email is null then
-    raise exception 'salon not found';
-  end if;
-
-  update auth.users
-    set encrypted_password = crypt(p_new_password, gen_salt('bf'))
-    where email = v_email;
+  insert into salons (salon_name, contact_name, email, phone, zip, address, instagram, salon_url, desired_products, notes)
+  values (p_salon_name, p_contact_name, p_email, p_phone, p_zip, p_address, p_instagram, p_salon_url, p_desired_products, p_notes)
+  returning * into v_salon;
+  return v_salon;
 end;
 $$;
+
+grant execute on function register_salon(text, text, text, text, text, text, text, text, text, text) to anon, authenticated;
+
+-- find_salon_email_by_code: the unauthenticated login screen's only way to
+-- turn "the code someone typed" into the email Supabase Auth needs to sign
+-- in with. Only ever returns an approved salon's email, never anything else
+-- about it, and only for an exact code match.
+create or replace function find_salon_email_by_code(p_code text)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select email from salons where login_code = p_code and status = 'approved' limit 1;
+$$;
+
+grant execute on function find_salon_email_by_code(text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- product-images: public bucket for product photos, admin-managed.
