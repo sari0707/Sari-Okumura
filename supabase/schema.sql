@@ -146,7 +146,8 @@ create table if not exists products (
   stock int not null default 0,
   active boolean not null default true,
   sort_order int not null default 0,
-  image_url text
+  image_url text,
+  requires_shipping boolean not null default true
 );
 
 alter table products enable row level security;

@@ -6,6 +6,7 @@ import {
   ChevronLeft, ChevronRight, Search, X, AlertCircle, LogOut,
   ShieldCheck, Banknote, Edit3, Eye, EyeOff, ArrowRight, Sparkles
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { supabase } from "./src/supabaseClient.js";
 
 /* ============================================================
@@ -115,6 +116,7 @@ const mapProduct = (r) => ({
   active: r.active,
   sortOrder: r.sort_order,
   imageUrl: r.image_url || "",
+  requiresShipping: r.requires_shipping,
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
 
@@ -169,6 +171,7 @@ const productToDb = (patch) => {
   if ("active" in patch) dbPatch.active = patch.active;
   if ("sortOrder" in patch) dbPatch.sort_order = patch.sortOrder;
   if ("imageUrl" in patch) dbPatch.image_url = patch.imageUrl || null;
+  if ("requiresShipping" in patch) dbPatch.requires_shipping = patch.requiresShipping;
   return dbPatch;
 };
 
@@ -856,10 +859,17 @@ function calcCartTotals(cart, products, salon) {
     const p = products.find((pp) => pp.id === c.productId);
     if (!p) return null;
     const unitPrice = priceFor(p, salon);
-    return { productId: p.id, name: p.name, imageUrl: p.imageUrl, unitPrice, qty: c.qty, subtotal: unitPrice * c.qty };
+    return {
+      productId: p.id, name: p.name, imageUrl: p.imageUrl, unitPrice, qty: c.qty,
+      subtotal: unitPrice * c.qty, requiresShipping: p.requiresShipping !== false,
+    };
   }).filter(Boolean);
   const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
-  const shipping = subtotal === 0 || subtotal >= FREE_SHIP_THRESHOLD ? 0 : SHIPPING_FEE;
+  // Only items that require shipping count toward whether a fee applies at
+  // all, and toward the free-shipping threshold - an order made up only of
+  // shipping-exempt items never gets charged, regardless of its total.
+  const shippableSubtotal = items.filter((i) => i.requiresShipping).reduce((s, i) => s + i.subtotal, 0);
+  const shipping = shippableSubtotal === 0 || shippableSubtotal >= FREE_SHIP_THRESHOLD ? 0 : SHIPPING_FEE;
   const total = subtotal + shipping;
   return { items, subtotal, shipping, total };
 }
@@ -1178,14 +1188,89 @@ function AdminDashboard({ salons, orders, products, setView }) {
   );
 }
 
-function AdminSalons({ salons, updateSalon }) {
+function SalonCreateForm({ adminCreateSalon, onDone, onCancel }) {
+  const [form, setForm] = useState({
+    salonName: "", contactName: "", email: "", phone: "", zip: "", address: "",
+    instagram: "", salonUrl: "", desiredProducts: "", notes: "",
+  });
+  const [partnerAccount, setPartnerAccount] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const canSubmit = form.salonName && form.contactName && form.email && form.phone && form.address;
+
+  const submit = async () => {
+    setSubmitting(true);
+    setSubmitError("");
+    const { error, loginCode } = await adminCreateSalon(form, partnerAccount);
+    setSubmitting(false);
+    if (error) {
+      setSubmitError(
+        error.code === "23505" || error.code === "user_already_exists"
+          ? "このメールアドレスはすでに登録されています。"
+          : "登録に失敗しました。時間をおいて再度お試しください。"
+      );
+      return;
+    }
+    alert(`サロンを追加しました。ログインコード：${loginCode}\nこのコードをサロンにお伝えください。`);
+    onDone();
+  };
+
+  return (
+    <Card style={{ padding: 20, marginBottom: 20, background: C.sage, border: "none" }}>
+      <Field label="サロン名 / 店舗名" required><Input value={form.salonName} onChange={set("salonName")} /></Field>
+      <Field label="ご担当者名" required><Input value={form.contactName} onChange={set("contactName")} /></Field>
+      <Field label="メールアドレス" required><Input type="email" value={form.email} onChange={set("email")} /></Field>
+      <Field label="電話番号" required><Input value={form.phone} onChange={set("phone")} /></Field>
+      <Field label="郵便番号"><Input value={form.zip} onChange={set("zip")} /></Field>
+      <Field label="住所" required><Input value={form.address} onChange={set("address")} /></Field>
+      <Field label="Instagramアカウント"><Input value={form.instagram} onChange={set("instagram")} /></Field>
+      <Field label="サロンURL"><Input value={form.salonUrl} onChange={set("salonUrl")} /></Field>
+      <Field label="希望する取扱商品"><Input value={form.desiredProducts} onChange={set("desiredProducts")} /></Field>
+      <Field label="その他備考"><TextArea value={form.notes} onChange={set("notes")} /></Field>
+      <Field label="区分">
+        <select
+          value={partnerAccount ? "partner" : "salon"}
+          onChange={(e) => setPartnerAccount(e.target.value === "partner")}
+          style={inputStyle}
+        >
+          <option value="salon">サロン</option>
+          <option value="partner">営業パートナー</option>
+        </select>
+      </Field>
+      {submitError && <div style={{ color: C.clay, fontSize: 12.5, marginBottom: 14 }}>{submitError}</div>}
+      <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 14 }}>
+        ここから追加したサロンは自動的に承認済みになります。
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Btn disabled={!canSubmit || submitting} onClick={submit}>{submitting ? "作成中…" : "追加する"}</Btn>
+        <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
+      </div>
+    </Card>
+  );
+}
+
+function AdminSalons({ salons, updateSalon, adminCreateSalon }) {
   const [filter, setFilter] = useState("all");
   const [expanded, setExpanded] = useState(null);
+  const [creating, setCreating] = useState(false);
   const list = salons.filter((s) => filter === "all" || s.status === filter);
 
   return (
     <Screen maxWidth={860}>
-      <SectionTitle eyebrow="ADMIN" title="サロン管理" />
+      <SectionTitle eyebrow="ADMIN" title="サロン管理" right={
+        <Btn icon={Plus} onClick={() => setCreating(true)}>サロンを追加</Btn>
+      } />
+
+      {creating && (
+        <SalonCreateForm
+          adminCreateSalon={adminCreateSalon}
+          onDone={() => setCreating(false)}
+          onCancel={() => setCreating(false)}
+        />
+      )}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
         {[["all", "すべて"], ["pending", "承認待ち"], ["approved", "承認済"], ["rejected", "却下"]].map(([k, label]) => (
           <button key={k} onClick={() => setFilter(k)} style={{
@@ -1657,6 +1742,7 @@ function AdminProducts({ products, updateProduct, addProduct, moveProduct }) {
                   <div style={{ fontSize: 11.5, color: C.inkSoft }}>{p.volume}</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>
                     卸 {yen(p.wholesalePrice)} ／ パートナー {p.partnerPrice == null ? "卸価格と同じ" : yen(p.partnerPrice)} ／ 一般 {yen(p.generalPrice)} ／ 在庫 {p.stock} ／ 最低{p.minOrderQty}個
+                    {p.requiresShipping === false && <span style={{ color: C.gold, fontWeight: 700 }}> ／ 送料対象外</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -1685,6 +1771,7 @@ function ProductEditForm({ initial, onSave, onCancel }) {
     ...initial,
     partnerPrice: initial?.partnerPrice ?? "",
     imageUrl: initial?.imageUrl || "",
+    requiresShipping: initial?.requiresShipping ?? true,
   });
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -1741,6 +1828,14 @@ function ProductEditForm({ initial, onSave, onCancel }) {
         <Field label="最低注文数"><Input type="number" value={f.minOrderQty} onChange={setNum("minOrderQty")} /></Field>
         <Field label="在庫数"><Input type="number" value={f.stock} onChange={setNum("stock")} /></Field>
       </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={f.requiresShipping}
+          onChange={(e) => setF({ ...f, requiresShipping: e.target.checked })}
+        />
+        <span style={{ fontSize: 13, color: C.ink }}>送料の対象にする</span>
+      </label>
       <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
         <Btn disabled={uploading} onClick={() => onSave({ ...f, partnerPrice: f.partnerPrice === "" ? "" : Number(f.partnerPrice) })}>保存する</Btn>
         <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
@@ -1961,6 +2056,45 @@ export default function App() {
     // stays on the registration confirmation screen until an admin approves.
     await supabase.auth.signOut();
     return { error: signUpErr, loginCode };
+  };
+
+  // Operator adding a salon directly (phone/in-person sign-ups): creates it
+  // pre-approved, with the chosen 区分. Creates the auth account through an
+  // isolated client (persistSession: false) so signUp() doesn't hijack the
+  // admin's own active session in this browser the way it would on the
+  // shared `supabase` client.
+  const adminCreateSalon = async (form, partnerAccount) => {
+    const { data: salonRow, error } = await supabase.rpc("register_salon", {
+      p_salon_name: form.salonName,
+      p_contact_name: form.contactName,
+      p_email: form.email,
+      p_phone: form.phone,
+      p_zip: form.zip,
+      p_address: form.address,
+      p_instagram: form.instagram,
+      p_salon_url: form.salonUrl,
+      p_desired_products: form.desiredProducts,
+      p_notes: form.notes,
+    });
+    if (error) return { error };
+
+    const loginCode = salonRow.login_code;
+    const isolatedClient = createClient(
+      import.meta.env.VITE_SUPABASE_URL,
+      import.meta.env.VITE_SUPABASE_ANON_KEY,
+      { auth: { persistSession: false } }
+    );
+    const { error: signUpErr } = await isolatedClient.auth.signUp({ email: form.email, password: loginCode });
+    if (signUpErr) return { error: signUpErr };
+
+    await supabase.from("salons").update({
+      status: "approved",
+      account_type: partnerAccount ? "partner" : "salon",
+    }).eq("id", salonRow.id);
+
+    const { data } = await supabase.from("salons").select("*").order("registered_at", { ascending: true });
+    setSalons(mapSalons(data));
+    return { error: null, loginCode };
   };
 
   const updateSalon = async (id, patch) => {
@@ -2184,7 +2318,7 @@ export default function App() {
           <AdminNav view={view} setView={setView} />
         </div>
         {view === "admin-dashboard" && <AdminDashboard salons={salons} orders={orders} products={products} setView={setView} />}
-        {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} />}
+        {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} adminCreateSalon={adminCreateSalon} />}
         {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} cancelOrder={cancelOrder} setView={setView} />}
         {view === "admin-create-order" && <AdminCreateOrder salons={salons} products={products} adminPlaceOrder={adminPlaceOrder} setView={setView} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}
