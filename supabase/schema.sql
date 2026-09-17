@@ -243,6 +243,48 @@ begin
 end;
 $$;
 
+-- Operator-only: the same as place_order(), but for an order the operator
+-- is entering on a salon's behalf (phone/in-person orders) - takes the
+-- target salon explicitly instead of resolving it from auth.uid().
+create or replace function admin_place_order(
+  p_salon_id uuid,
+  p_order_number text,
+  p_items jsonb,
+  p_subtotal numeric,
+  p_shipping numeric,
+  p_total numeric
+)
+returns orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_item jsonb;
+  v_order orders;
+begin
+  if not is_admin() then
+    raise exception 'only the operator can do this';
+  end if;
+
+  for v_item in select * from jsonb_array_elements(p_items) loop
+    update products
+      set stock = stock - (v_item->>'qty')::int
+      where id = (v_item->>'productId')::uuid
+        and stock >= (v_item->>'qty')::int;
+    if not found then
+      raise exception 'insufficient stock for product %', v_item->>'name';
+    end if;
+  end loop;
+
+  insert into orders (order_number, salon_id, items, subtotal, shipping, total)
+  values (p_order_number, p_salon_id, p_items, p_subtotal, p_shipping, p_total)
+  returning * into v_order;
+
+  return v_order;
+end;
+$$;
+
 -- Operator-only: cancel an order and put its items' quantities back into
 -- stock. Idempotent (cancelling an already-cancelled order is a no-op).
 create or replace function cancel_order(p_order_id uuid)

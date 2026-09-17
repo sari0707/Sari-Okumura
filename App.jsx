@@ -421,6 +421,7 @@ function AdminNav({ view, setView }) {
     { key: "admin-dashboard", label: "ダッシュボード" },
     { key: "admin-salons", label: "サロン管理" },
     { key: "admin-orders", label: "注文管理" },
+    { key: "admin-create-order", label: "注文を作成" },
     { key: "admin-products", label: "商品・在庫" },
     { key: "admin-settings", label: "設定" },
   ];
@@ -1274,6 +1275,94 @@ function AdminSalons({ salons, updateSalon }) {
   );
 }
 
+function AdminCreateOrder({ salons, products, adminPlaceOrder, setView }) {
+  const approvedSalons = salons.filter((s) => s.status === "approved");
+  const [salonId, setSalonId] = useState(approvedSalons[0]?.id || "");
+  const [qtyMap, setQtyMap] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+
+  const selectedSalon = salons.find((s) => s.id === salonId) || null;
+  const activeProducts = products.filter((p) => p.active);
+  const cart = activeProducts
+    .map((p) => ({ productId: p.id, qty: Number(qtyMap[p.id]) || 0 }))
+    .filter((c) => c.qty > 0);
+  const { items, subtotal, shipping, total } = calcCartTotals(cart, products, selectedSalon);
+
+  const submit = async () => {
+    if (!salonId || items.length === 0) return;
+    setSubmitting(true);
+    const { error } = await adminPlaceOrder(salonId, cart);
+    setSubmitting(false);
+    if (!error) {
+      setQtyMap({});
+      alert("注文を作成しました。");
+      setView("admin-orders");
+    }
+  };
+
+  if (approvedSalons.length === 0) {
+    return (
+      <Screen maxWidth={860}>
+        <SectionTitle eyebrow="ADMIN" title="注文を作成" />
+        <EmptyState title="承認済みのサロンがありません" sub="先にサロンを承認してください" />
+      </Screen>
+    );
+  }
+
+  return (
+    <Screen maxWidth={860}>
+      <SectionTitle eyebrow="ADMIN" title="注文を作成" />
+
+      <Card style={{ padding: 18, marginBottom: 18 }}>
+        <Field label="サロン" required>
+          <select
+            value={salonId}
+            onChange={(e) => setSalonId(e.target.value)}
+            style={inputStyle}
+          >
+            {approvedSalons.map((s) => (
+              <option key={s.id} value={s.id}>{s.salonName}{s.partnerAccount ? "（営業パートナー）" : ""}</option>
+            ))}
+          </select>
+        </Field>
+      </Card>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+        {activeProducts.map((p) => (
+          <Card key={p.id} style={{ padding: 14, display: "flex", alignItems: "center", gap: 14 }}>
+            <ProductArt size={48} src={p.imageUrl} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</div>
+              <div style={{ fontSize: 12, color: C.inkSoft }}>単価 {yen(priceFor(p, selectedSalon))} ／ 在庫 {p.stock}</div>
+            </div>
+            <Input
+              type="number"
+              min={0}
+              value={qtyMap[p.id] ?? ""}
+              onChange={(e) => setQtyMap({ ...qtyMap, [p.id]: e.target.value })}
+              style={{ width: 80, textAlign: "right" }}
+              placeholder="0"
+            />
+          </Card>
+        ))}
+        {activeProducts.length === 0 && <EmptyState title="販売中の商品がありません" />}
+      </div>
+
+      <Card style={{ padding: 18, marginBottom: 20 }}>
+        <Row label="小計" value={yen(subtotal)} />
+        <Row label="送料" value={shipping === 0 ? "無料" : yen(shipping)} />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontWeight: 700 }}>
+          <span>合計</span><span>{yen(total)}</span>
+        </div>
+      </Card>
+
+      <Btn full disabled={submitting || items.length === 0} onClick={submit}>
+        {submitting ? "作成中…" : "この内容で注文を作成する"}
+      </Btn>
+    </Screen>
+  );
+}
+
 function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
   const [filter, setFilter] = useState("all");
   const filtered = [...orders].reverse().filter((o) => filter === "all" || deriveOrderStatus(o) === filter);
@@ -1347,6 +1436,9 @@ function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
               )}
 
               <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Btn variant="outline" icon={Package} onClick={() => setView("admin-delivery-note", o.id)} style={{ padding: "8px 14px", fontSize: 12.5 }}>
+                  納品書を発行
+                </Btn>
                 <Btn variant="outline" icon={Banknote} onClick={() => setView("admin-receipt", o.id)} style={{ padding: "8px 14px", fontSize: 12.5 }}>
                   領収書を発行
                 </Btn>
@@ -1417,6 +1509,85 @@ function ReceiptScreen({ order, salon, bankInfo, setView }) {
 
         <div style={{ fontSize: 13.5, marginBottom: 30 }}>
           但し　{order.items.map((i) => i.name).join("、")}　代金として
+        </div>
+
+        <Card style={{ padding: 16, marginBottom: 40, fontSize: 12.5 }}>
+          <Row label="商品代金" value={yen(order.subtotal)} />
+          <Row label="送料" value={order.shipping === 0 ? "無料" : yen(order.shipping)} />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontWeight: 700 }}>
+            <span>合計</span><span>{yen(order.total)}</span>
+          </div>
+        </Card>
+
+        <div style={{ textAlign: "right", fontSize: 13, lineHeight: 1.9 }}>
+          <div style={{ fontWeight: 700 }}>{bankInfo.issuerName || "（発行者名が未設定です。設定画面からご入力ください）"}</div>
+          {bankInfo.issuerAddress && <div style={{ color: C.inkSoft }}>{bankInfo.issuerAddress}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeliveryNoteScreen({ order, salon, bankInfo, setView }) {
+  if (!order || !salon) {
+    return (
+      <Screen>
+        <EmptyState title="納品書を表示できません" sub="対象の注文が見つかりませんでした" />
+      </Screen>
+    );
+  }
+  return (
+    <div style={{ minHeight: "100vh", background: C.ivory }}>
+      <style>{`
+        @media print {
+          .print-hide { display: none !important; }
+          body { background: #fff !important; }
+        }
+      `}</style>
+      <div className="print-hide" style={{ padding: 16, display: "flex", gap: 10, maxWidth: 640, margin: "0 auto" }}>
+        <Btn variant="outline" icon={ChevronLeft} onClick={() => setView("admin-orders")}>注文管理へ戻る</Btn>
+        <Btn icon={Package} onClick={() => window.print()}>印刷 / PDF保存</Btn>
+      </div>
+
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "20px 32px 60px", background: C.white, boxShadow: "0 1px 0 rgba(0,0,0,0.05)" }}>
+        <div style={{ textAlign: "center", fontFamily: "'Shippori Mincho', serif", fontSize: 24, fontWeight: 700, letterSpacing: "0.3em", marginBottom: 32 }}>
+          納品書
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 30, fontSize: 12.5, color: C.inkSoft }}>
+          <div>注文番号：{order.orderNumber}</div>
+          <div>発行日：{todayStr()}</div>
+        </div>
+
+        <div style={{ fontSize: 18, fontWeight: 600, borderBottom: `2px solid ${C.ink}`, paddingBottom: 10, marginBottom: 26 }}>
+          {salon.salonName} 御中
+        </div>
+
+        <div style={{ fontSize: 13, color: C.inkSoft, marginBottom: 18 }}>
+          下記の通り納品いたします。
+        </div>
+
+        <div style={{ overflowX: "auto", marginBottom: 20 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `2px solid ${C.ink}` }}>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>商品名</th>
+                <th style={{ textAlign: "right", padding: "8px 4px" }}>数量</th>
+                <th style={{ textAlign: "right", padding: "8px 4px" }}>単価</th>
+                <th style={{ textAlign: "right", padding: "8px 4px" }}>金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {order.items.map((i) => (
+                <tr key={i.productId} style={{ borderBottom: `1px solid ${C.line}` }}>
+                  <td style={{ padding: "8px 4px" }}>{i.name}</td>
+                  <td style={{ textAlign: "right", padding: "8px 4px" }}>{i.qty}</td>
+                  <td style={{ textAlign: "right", padding: "8px 4px" }}>{yen(i.unitPrice)}</td>
+                  <td style={{ textAlign: "right", padding: "8px 4px" }}>{yen(i.subtotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
         <Card style={{ padding: 16, marginBottom: 40, fontSize: 12.5 }}>
@@ -1655,7 +1826,7 @@ export default function App() {
 
   const setView = (v, param) => {
     if (v === "productDetail" && param) setSelectedProductId(param);
-    if (v === "admin-receipt" && param) setReceiptOrderId(param);
+    if ((v === "admin-receipt" || v === "admin-delivery-note") && param) setReceiptOrderId(param);
     window.scrollTo(0, 0);
     setViewRaw(v);
   };
@@ -1889,6 +2060,31 @@ export default function App() {
     setView("complete");
   };
 
+  // Operator entering an order on a salon's behalf (phone/in-person orders).
+  const adminPlaceOrder = async (salonId, adminCart) => {
+    const targetSalon = salons.find((s) => s.id === salonId);
+    const { items, subtotal, shipping, total } = calcCartTotals(adminCart, products, targetSalon);
+    const { error } = await supabase.rpc("admin_place_order", {
+      p_salon_id: salonId,
+      p_order_number: genOrderNumber(),
+      p_items: items,
+      p_subtotal: subtotal,
+      p_shipping: shipping,
+      p_total: total,
+    });
+    if (error) {
+      alert("注文の作成に失敗しました：" + error.message);
+      return { error };
+    }
+    const [{ data: ordersData }, { data: productsData }] = await Promise.all([
+      supabase.from("orders").select("*").order("created_at", { ascending: true }),
+      supabase.from("products").select("*").order("sort_order"),
+    ]);
+    setOrders(mapOrders(ordersData));
+    setProducts(mapProducts(productsData));
+    return { error: null };
+  };
+
   const doLogout = async () => {
     await supabase.auth.signOut();
     setCart([]);
@@ -1990,9 +2186,11 @@ export default function App() {
         {view === "admin-dashboard" && <AdminDashboard salons={salons} orders={orders} products={products} setView={setView} />}
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} />}
         {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} cancelOrder={cancelOrder} setView={setView} />}
+        {view === "admin-create-order" && <AdminCreateOrder salons={salons} products={products} adminPlaceOrder={adminPlaceOrder} setView={setView} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
         {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
+        {view === "admin-delivery-note" && <DeliveryNoteScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
       </div>
     );
   }
