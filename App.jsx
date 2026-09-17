@@ -88,7 +88,8 @@ const mapSalon = (r) => ({
   userId: r.user_id,
   salonName: r.salon_name,
   contactName: r.contact_name,
-  email: r.email,
+  email: r.email || "",
+  authEmail: r.auth_email,
   phone: r.phone,
   zip: r.zip || "",
   address: r.address,
@@ -586,7 +587,7 @@ function RegisterScreen({ onSubmit, goLogin }) {
   const [submitError, setSubmitError] = useState("");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const canSubmit = form.salonName && form.contactName && form.email && form.phone && form.address;
+  const canSubmit = form.salonName && form.contactName && form.phone && form.address;
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -644,7 +645,7 @@ function RegisterScreen({ onSubmit, goLogin }) {
         <Card style={{ padding: 24 }}>
           <Field label="サロン名 / 店舗名" required><Input value={form.salonName} onChange={set("salonName")} placeholder="例）よもぎ蒸しサロン 花" /></Field>
           <Field label="ご担当者名" required><Input value={form.contactName} onChange={set("contactName")} placeholder="例）山田 花子" /></Field>
-          <Field label="メールアドレス" required><Input type="email" value={form.email} onChange={set("email")} /></Field>
+          <Field label="メールアドレス" hint="任意です。未入力でも登録できます"><Input type="email" value={form.email} onChange={set("email")} /></Field>
           <Field label="電話番号" required><Input value={form.phone} onChange={set("phone")} placeholder="090-0000-0000" /></Field>
           <Field label="郵便番号"><Input value={form.zip} onChange={set("zip")} placeholder="000-0000" /></Field>
           <Field label="住所" required><Input value={form.address} onChange={set("address")} placeholder="都道府県から番地まで" /></Field>
@@ -942,7 +943,7 @@ function CheckoutScreen({ salon, cart, products, bankInfo, onConfirm, setView })
       <Card style={{ padding: 16, marginBottom: 20, fontSize: 13, lineHeight: 2 }}>
         <div>{salon.salonName}（{salon.contactName} 様）</div>
         <div style={{ color: C.inkSoft }}>{salon.address}</div>
-        <div style={{ color: C.inkSoft }}>{salon.phone} ／ {salon.email}</div>
+        <div style={{ color: C.inkSoft }}>{salon.phone}{salon.email ? ` ／ ${salon.email}` : ""}</div>
       </Card>
 
       <div style={{ fontSize: 12.5, fontWeight: 700, color: C.inkSoft, marginBottom: 8 }}>ご注文商品</div>
@@ -1058,7 +1059,7 @@ function MyPageScreen({ salon, orders, setView }) {
           </div>
         </div>
         <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 2 }}>
-          <div><Mail size={12} style={{ display: "inline", marginRight: 6 }} />{salon.email}</div>
+          {salon.email && <div><Mail size={12} style={{ display: "inline", marginRight: 6 }} />{salon.email}</div>}
           <div><Phone size={12} style={{ display: "inline", marginRight: 6 }} />{salon.phone}</div>
           <div><MapPin size={12} style={{ display: "inline", marginRight: 6 }} />{salon.address}</div>
           {salon.instagram && <div><Instagram size={12} style={{ display: "inline", marginRight: 6 }} />{salon.instagram}</div>}
@@ -1198,7 +1199,7 @@ function SalonCreateForm({ adminCreateSalon, onDone, onCancel }) {
   const [submitError, setSubmitError] = useState("");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const canSubmit = form.salonName && form.contactName && form.email && form.phone && form.address;
+  const canSubmit = form.salonName && form.contactName && form.phone && form.address;
 
   const submit = async () => {
     setSubmitting(true);
@@ -1221,7 +1222,7 @@ function SalonCreateForm({ adminCreateSalon, onDone, onCancel }) {
     <Card style={{ padding: 20, marginBottom: 20, background: C.sage, border: "none" }}>
       <Field label="サロン名 / 店舗名" required><Input value={form.salonName} onChange={set("salonName")} /></Field>
       <Field label="ご担当者名" required><Input value={form.contactName} onChange={set("contactName")} /></Field>
-      <Field label="メールアドレス" required><Input type="email" value={form.email} onChange={set("email")} /></Field>
+      <Field label="メールアドレス" hint="任意です"><Input type="email" value={form.email} onChange={set("email")} /></Field>
       <Field label="電話番号" required><Input value={form.phone} onChange={set("phone")} /></Field>
       <Field label="郵便番号"><Input value={form.zip} onChange={set("zip")} /></Field>
       <Field label="住所" required><Input value={form.address} onChange={set("address")} /></Field>
@@ -1294,7 +1295,7 @@ function AdminSalons({ salons, updateSalon, adminCreateSalon }) {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{s.contactName} ・ {s.email}</div>
+                <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{s.contactName}{s.email ? ` ・ ${s.email}` : ""}</div>
                 <div style={{ fontSize: 11, color: C.inkSoft, marginTop: 2 }}>登録日：{s.registeredAt}</div>
               </div>
               <span style={{
@@ -1979,7 +1980,7 @@ export default function App() {
 
       let { data: salonRow } = await supabase.from("salons").select("*").eq("user_id", session.user.id).maybeSingle();
       if (!salonRow) {
-        const { data: unclaimed } = await supabase.from("salons").select("*").eq("email", email).is("user_id", null).maybeSingle();
+        const { data: unclaimed } = await supabase.from("salons").select("*").eq("auth_email", email).is("user_id", null).maybeSingle();
         if (unclaimed) {
           const { data: claimed } = await supabase
             .from("salons")
@@ -2039,7 +2040,7 @@ export default function App() {
     const { data: salonRow, error } = await supabase.rpc("register_salon", {
       p_salon_name: form.salonName,
       p_contact_name: form.contactName,
-      p_email: form.email,
+      p_email: form.email.trim() || null,
       p_phone: form.phone,
       p_zip: form.zip,
       p_address: form.address,
@@ -2051,7 +2052,7 @@ export default function App() {
     if (error) return { error };
 
     const loginCode = salonRow.login_code;
-    const { error: signUpErr } = await supabase.auth.signUp({ email: form.email, password: loginCode });
+    const { error: signUpErr } = await supabase.auth.signUp({ email: salonRow.auth_email, password: loginCode });
     // signUp() logs this browser in immediately; sign back out so the guest
     // stays on the registration confirmation screen until an admin approves.
     await supabase.auth.signOut();
@@ -2067,7 +2068,7 @@ export default function App() {
     const { data: salonRow, error } = await supabase.rpc("register_salon", {
       p_salon_name: form.salonName,
       p_contact_name: form.contactName,
-      p_email: form.email,
+      p_email: form.email.trim() || null,
       p_phone: form.phone,
       p_zip: form.zip,
       p_address: form.address,
@@ -2084,7 +2085,7 @@ export default function App() {
       import.meta.env.VITE_SUPABASE_ANON_KEY,
       { auth: { persistSession: false } }
     );
-    const { error: signUpErr } = await isolatedClient.auth.signUp({ email: form.email, password: loginCode });
+    const { error: signUpErr } = await isolatedClient.auth.signUp({ email: salonRow.auth_email, password: loginCode });
     if (signUpErr) return { error: signUpErr };
 
     await supabase.from("salons").update({

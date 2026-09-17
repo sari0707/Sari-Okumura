@@ -50,7 +50,8 @@ create table if not exists salons (
   user_id uuid unique references auth.users(id) on delete set null,
   salon_name text not null,
   contact_name text not null,
-  email text not null unique,
+  email text unique, -- optional contact address; never used for auth
+  auth_email text unique, -- always present; the identifier signUp()/signInWithPassword() actually use
   phone text not null,
   zip text,
   address text not null,
@@ -66,10 +67,17 @@ create table if not exists salons (
 
 alter table salons enable row level security;
 
+-- Migrating an existing database: these ALTERs are what actually take
+-- effect there (the CREATE TABLE above is a no-op once the table exists).
+alter table salons add column if not exists auth_email text unique;
+alter table salons alter column email drop not null;
+
 -- Each salon's own permanent, individual login code (e.g. yomogi001),
--- assigned automatically on registration - also used as its Supabase Auth
--- password, so there is nothing to keep in sync when account_type changes
--- and no shared list of names for one salon to browse another's info in.
+-- assigned automatically on registration - also used (as <code>@yomogi-wholesale.local)
+-- for its Supabase Auth identity, so real contact email is optional and
+-- never required for login. There is nothing to keep in sync when
+-- account_type changes, and no shared list of names for one salon to
+-- browse another's info in.
 create sequence if not exists salon_login_code_seq;
 
 create or replace function generate_salon_login_code()
@@ -80,6 +88,9 @@ begin
   if new.login_code is null then
     new.login_code := 'yomogi' || lpad(nextval('salon_login_code_seq')::text, 3, '0');
   end if;
+  if new.auth_email is null then
+    new.auth_email := new.login_code || '@yomogi-wholesale.local';
+  end if;
   return new;
 end;
 $$;
@@ -89,8 +100,11 @@ create trigger trg_salon_login_code
   before insert on salons
   for each row execute function generate_salon_login_code();
 
--- One-time backfill for salons registered before login_code existed,
--- assigned in registration order, then advance the sequence past them.
+-- One-time backfill for salons registered before login_code/auth_email
+-- existed, assigned in registration order, then advance the sequence past
+-- them. Existing salons keep their real email as auth_email (that's the
+-- address their Supabase Auth account already uses); only rows with no
+-- email at all fall back to the synthetic pattern.
 with numbered as (
   select id, row_number() over (order by registered_at) as rn
   from salons where login_code is null
@@ -100,6 +114,9 @@ from numbered where s.id = numbered.id;
 
 select setval('salon_login_code_seq', (select count(*) from salons where login_code is not null));
 
+update salons set auth_email = email where auth_email is null and email is not null;
+update salons set auth_email = login_code || '@yomogi-wholesale.local' where auth_email is null;
+
 -- Public registration form: anyone can create a pending salon row. Prefer
 -- the register_salon() RPC below, which also returns the assigned code.
 create policy "anyone can register a salon"
@@ -107,18 +124,20 @@ create policy "anyone can register a salon"
   to anon, authenticated
   with check (status = 'pending' and user_id is null);
 
--- A logged-in salon can see its own row (matched by user_id, or by email
--- before it has claimed the row on first login).
+-- A logged-in salon can see its own row (matched by user_id, or by
+-- auth_email before it has claimed the row on first login).
+drop policy if exists "salon can read own row" on salons;
 create policy "salon can read own row"
   on salons for select
   to authenticated
-  using (user_id = auth.uid() or (user_id is null and email = auth.email()));
+  using (user_id = auth.uid() or (user_id is null and auth_email = auth.email()));
 
 -- Let a freshly-authenticated user claim their pending salon row once.
+drop policy if exists "salon can claim own row on first login" on salons;
 create policy "salon can claim own row on first login"
   on salons for update
   to authenticated
-  using (user_id is null and email = auth.email())
+  using (user_id is null and auth_email = auth.email())
   with check (user_id = auth.uid());
 
 create policy "admin can read all salons"
@@ -398,9 +417,10 @@ $$;
 grant execute on function register_salon(text, text, text, text, text, text, text, text, text, text) to anon, authenticated;
 
 -- find_salon_email_by_code: the unauthenticated login screen's only way to
--- turn "the code someone typed" into the email Supabase Auth needs to sign
--- in with. Only ever returns an approved salon's email, never anything else
--- about it, and only for an exact code match.
+-- turn "the code someone typed" into the auth_email Supabase Auth needs to
+-- sign in with (never the optional contact email). Only ever returns an
+-- approved salon's auth identifier, never anything else about it, and only
+-- for an exact code match.
 create or replace function find_salon_email_by_code(p_code text)
 returns text
 language sql
@@ -408,7 +428,7 @@ stable
 security definer
 set search_path = public
 as $$
-  select email from salons where login_code = p_code and status = 'approved' limit 1;
+  select auth_email from salons where login_code = p_code and status = 'approved' limit 1;
 $$;
 
 grant execute on function find_salon_email_by_code(text) to anon, authenticated;
