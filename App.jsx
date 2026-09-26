@@ -7,6 +7,7 @@ import {
   ShieldCheck, Banknote, Edit3, Eye, EyeOff, ArrowRight, Sparkles
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
 import { supabase } from "./src/supabaseClient.js";
 
 /* ============================================================
@@ -118,6 +119,7 @@ const mapProduct = (r) => ({
   sortOrder: r.sort_order,
   imageUrl: r.image_url || "",
   requiresShipping: r.requires_shipping,
+  billingType: r.billing_type,
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
 
@@ -141,6 +143,7 @@ const mapOrder = (r) => ({
   trackingNumber: r.tracking_number || "",
   shippedAt: r.shipped_at || "",
   createdAt: fmtDate(r.created_at),
+  createdAtRaw: r.created_at,
   cancelled: !!r.cancelled_at,
 });
 const mapOrders = (rows) => (rows || []).map(mapOrder);
@@ -173,6 +176,7 @@ const productToDb = (patch) => {
   if ("sortOrder" in patch) dbPatch.sort_order = patch.sortOrder;
   if ("imageUrl" in patch) dbPatch.image_url = patch.imageUrl || null;
   if ("requiresShipping" in patch) dbPatch.requires_shipping = patch.requiresShipping;
+  if ("billingType" in patch) dbPatch.billing_type = patch.billingType;
   return dbPatch;
 };
 
@@ -426,6 +430,7 @@ function AdminNav({ view, setView }) {
     { key: "admin-salons", label: "サロン管理" },
     { key: "admin-orders", label: "注文管理" },
     { key: "admin-create-order", label: "注文を作成" },
+    { key: "admin-monthly-invoice", label: "月次請求" },
     { key: "admin-products", label: "商品・在庫" },
     { key: "admin-settings", label: "設定" },
   ];
@@ -863,6 +868,7 @@ function calcCartTotals(cart, products, salon) {
     return {
       productId: p.id, name: p.name, imageUrl: p.imageUrl, unitPrice, qty: c.qty,
       subtotal: unitPrice * c.qty, requiresShipping: p.requiresShipping !== false,
+      billingType: p.billingType || "immediate",
     };
   }).filter(Boolean);
   const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
@@ -1453,9 +1459,33 @@ function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
   const [filter, setFilter] = useState("all");
   const filtered = [...orders].reverse().filter((o) => filter === "all" || deriveOrderStatus(o) === filter);
 
+  const exportToExcel = () => {
+    const rows = filtered.map((o) => {
+      const s = salons.find((x) => x.id === o.salonId);
+      return {
+        "注文番号": o.orderNumber,
+        "注文日": o.createdAt,
+        "サロン名": s?.salonName || "不明",
+        "商品": o.items.map((i) => `${i.name}×${i.qty}`).join("、"),
+        "小計": o.subtotal,
+        "送料": o.shipping,
+        "合計": o.total,
+        "入金状況": o.paymentStatus,
+        "発送状況": o.shipStatus,
+        "状態": deriveOrderStatus(o),
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "注文一覧");
+    XLSX.writeFile(wb, `注文一覧_${todayStr().replaceAll("/", "")}.xlsx`);
+  };
+
   return (
     <Screen maxWidth={860}>
-      <SectionTitle eyebrow="ADMIN" title="注文管理" />
+      <SectionTitle eyebrow="ADMIN" title="注文管理" right={
+        <Btn variant="outline" onClick={exportToExcel} disabled={filtered.length === 0}>Excelでダウンロード</Btn>
+      } />
       <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
         <button onClick={() => setFilter("all")} style={{
           border: `1px solid ${filter === "all" ? C.forest : C.line}`, background: filter === "all" ? C.forest : C.white,
@@ -1693,6 +1723,143 @@ function DeliveryNoteScreen({ order, salon, bankInfo, setView }) {
   );
 }
 
+function MonthlyInvoiceScreen({ salons, orders, bankInfo }) {
+  const approvedSalons = salons.filter((s) => s.status === "approved");
+  const now = new Date();
+  const [salonId, setSalonId] = useState(approvedSalons[0]?.id || "");
+  const [yearMonth, setYearMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+  const [generated, setGenerated] = useState(false);
+
+  if (approvedSalons.length === 0) {
+    return (
+      <Screen maxWidth={860}>
+        <SectionTitle eyebrow="ADMIN" title="月次請求" />
+        <EmptyState title="承認済みのサロンがありません" />
+      </Screen>
+    );
+  }
+
+  const salon = salons.find((s) => s.id === salonId) || null;
+  const [year, month] = yearMonth.split("-").map(Number);
+
+  const lineItems = [];
+  orders.forEach((o) => {
+    if (o.salonId !== salonId || o.cancelled || !o.createdAtRaw) return;
+    const d = new Date(o.createdAtRaw);
+    if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return;
+    (o.items || []).forEach((i) => {
+      if (i.billingType !== "monthly") return;
+      lineItems.push({ ...i, orderNumber: o.orderNumber, orderDate: o.createdAt });
+    });
+  });
+  const total = lineItems.reduce((s, i) => s + i.subtotal, 0);
+
+  let dueYear = year, dueMonth = month + 1;
+  if (dueMonth > 12) { dueMonth = 1; dueYear += 1; }
+  const dueDateStr = `${dueYear}年${dueMonth}月20日`;
+  const periodStr = `${year}年${month}月分`;
+  const invoiceNumber = `INV-${year}${String(month).padStart(2, "0")}-${salon?.loginCode || ""}`;
+
+  if (!generated) {
+    return (
+      <Screen maxWidth={860}>
+        <SectionTitle eyebrow="ADMIN" title="月次請求" />
+        <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 18, lineHeight: 1.8 }}>
+          対象月に含まれる注文のうち、「月次請求」に設定した商品だけを集計して請求書を作成します。末締め・翌月20日払いです。
+        </div>
+        <Card style={{ padding: 18 }}>
+          <Field label="サロン" required>
+            <select value={salonId} onChange={(e) => setSalonId(e.target.value)} style={inputStyle}>
+              {approvedSalons.map((s) => (
+                <option key={s.id} value={s.id}>{s.salonName}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="対象月" required>
+            <Input type="month" value={yearMonth} onChange={(e) => setYearMonth(e.target.value)} />
+          </Field>
+          <Btn full onClick={() => setGenerated(true)}>請求書を作成する</Btn>
+        </Card>
+      </Screen>
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.ivory }}>
+      <style>{`
+        @media print {
+          .print-hide { display: none !important; }
+          body { background: #fff !important; }
+        }
+      `}</style>
+      <div className="print-hide" style={{ padding: 16, display: "flex", gap: 10, maxWidth: 640, margin: "0 auto" }}>
+        <Btn variant="outline" icon={ChevronLeft} onClick={() => setGenerated(false)}>条件を変更</Btn>
+        <Btn icon={Banknote} onClick={() => window.print()}>印刷 / PDF保存</Btn>
+      </div>
+
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "20px 32px 60px", background: C.white, boxShadow: "0 1px 0 rgba(0,0,0,0.05)" }}>
+        <div style={{ textAlign: "center", fontFamily: "'Shippori Mincho', serif", fontSize: 24, fontWeight: 700, letterSpacing: "0.3em", marginBottom: 32 }}>
+          請求書
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 30, fontSize: 12.5, color: C.inkSoft }}>
+          <div>請求書番号：{invoiceNumber}</div>
+          <div>発行日：{todayStr()}</div>
+        </div>
+
+        <div style={{ fontSize: 18, fontWeight: 600, borderBottom: `2px solid ${C.ink}`, paddingBottom: 10, marginBottom: 10 }}>
+          {salon?.salonName} 御中
+        </div>
+        <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 26 }}>
+          対象期間：{periodStr}（末締め）／ お支払い期限：{dueDateStr}
+        </div>
+
+        {lineItems.length === 0 ? (
+          <EmptyState title="対象の注文がありません" sub="この月・このサロンには月次請求対象の商品がありませんでした" />
+        ) : (
+          <>
+            <div style={{ overflowX: "auto", marginBottom: 20 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${C.ink}` }}>
+                    <th style={{ textAlign: "left", padding: "8px 4px" }}>注文日</th>
+                    <th style={{ textAlign: "left", padding: "8px 4px" }}>商品名</th>
+                    <th style={{ textAlign: "right", padding: "8px 4px" }}>数量</th>
+                    <th style={{ textAlign: "right", padding: "8px 4px" }}>単価</th>
+                    <th style={{ textAlign: "right", padding: "8px 4px" }}>金額</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lineItems.map((i, idx) => (
+                    <tr key={idx} style={{ borderBottom: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "8px 4px" }}>{i.orderDate}</td>
+                      <td style={{ padding: "8px 4px" }}>{i.name}</td>
+                      <td style={{ textAlign: "right", padding: "8px 4px" }}>{i.qty}</td>
+                      <td style={{ textAlign: "right", padding: "8px 4px" }}>{yen(i.unitPrice)}</td>
+                      <td style={{ textAlign: "right", padding: "8px 4px" }}>{yen(i.subtotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <Card style={{ padding: 16, marginBottom: 40, fontSize: 13, fontWeight: 700 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>ご請求金額合計</span><span>{yen(total)}</span>
+              </div>
+            </Card>
+          </>
+        )}
+
+        <div style={{ textAlign: "right", fontSize: 13, lineHeight: 1.9 }}>
+          <div style={{ fontWeight: 700 }}>{bankInfo.issuerName || "（発行者名が未設定です。設定画面からご入力ください）"}</div>
+          {bankInfo.issuerAddress && <div style={{ color: C.inkSoft }}>{bankInfo.issuerAddress}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminProducts({ products, updateProduct, addProduct, moveProduct }) {
   const [editing, setEditing] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -1744,6 +1911,7 @@ function AdminProducts({ products, updateProduct, addProduct, moveProduct }) {
                   <div style={{ fontSize: 12, marginTop: 4 }}>
                     卸 {yen(p.wholesalePrice)} ／ パートナー {p.partnerPrice == null ? "卸価格と同じ" : yen(p.partnerPrice)} ／ 一般 {yen(p.generalPrice)} ／ 在庫 {p.stock} ／ 最低{p.minOrderQty}個
                     {p.requiresShipping === false && <span style={{ color: C.gold, fontWeight: 700 }}> ／ 送料対象外</span>}
+                    {p.billingType === "monthly" && <span style={{ color: C.forest, fontWeight: 700 }}> ／ 月次請求</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -1773,6 +1941,7 @@ function ProductEditForm({ initial, onSave, onCancel }) {
     partnerPrice: initial?.partnerPrice ?? "",
     imageUrl: initial?.imageUrl || "",
     requiresShipping: initial?.requiresShipping ?? true,
+    billingType: initial?.billingType || "immediate",
   });
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -1837,6 +2006,16 @@ function ProductEditForm({ initial, onSave, onCancel }) {
         />
         <span style={{ fontSize: 13, color: C.ink }}>送料の対象にする</span>
       </label>
+      <Field label="支払い方法" hint="月次請求にすると、末締め・翌月20日払いの請求書にまとめられます">
+        <select
+          value={f.billingType}
+          onChange={(e) => setF({ ...f, billingType: e.target.value })}
+          style={inputStyle}
+        >
+          <option value="immediate">都度払い（銀行振込）</option>
+          <option value="monthly">月次請求</option>
+        </select>
+      </Field>
       <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
         <Btn disabled={uploading} onClick={() => onSave({ ...f, partnerPrice: f.partnerPrice === "" ? "" : Number(f.partnerPrice) })}>保存する</Btn>
         <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
@@ -2322,6 +2501,7 @@ export default function App() {
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} adminCreateSalon={adminCreateSalon} />}
         {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} cancelOrder={cancelOrder} setView={setView} />}
         {view === "admin-create-order" && <AdminCreateOrder salons={salons} products={products} adminPlaceOrder={adminPlaceOrder} setView={setView} />}
+        {view === "admin-monthly-invoice" && <MonthlyInvoiceScreen salons={salons} orders={orders} bankInfo={bankInfo} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
         {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}

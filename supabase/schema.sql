@@ -166,7 +166,8 @@ create table if not exists products (
   active boolean not null default true,
   sort_order int not null default 0,
   image_url text,
-  requires_shipping boolean not null default true
+  requires_shipping boolean not null default true,
+  billing_type text not null default 'immediate' check (billing_type in ('immediate', 'monthly'))
 );
 
 alter table products enable row level security;
