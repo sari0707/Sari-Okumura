@@ -1610,7 +1610,7 @@ function ReceiptScreen({ order, salon, bankInfo, setView }) {
 
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 30, fontSize: 12.5, color: C.inkSoft }}>
           <div>領収書番号：{order.orderNumber}</div>
-          <div>発行日：{todayStr()}</div>
+          <div>発行日：{order.createdAt}</div>
         </div>
 
         <div style={{ fontSize: 18, fontWeight: 600, borderBottom: `2px solid ${C.ink}`, paddingBottom: 10, marginBottom: 26 }}>
