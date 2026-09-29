@@ -1582,7 +1582,7 @@ function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
                     variant="danger"
                     icon={X}
                     onClick={() => {
-                      if (window.confirm(`注文 ${o.orderNumber} をキャンセルしますか？在庫が元に戻ります。`)) {
+                      if (window.confirm(`注文 ${o.orderNumber} をキャンセルしますか？\n在庫は元に戻りますが、注文データは完全に削除され、元に戻せません。`)) {
                         cancelOrder(o.id);
                       }
                     }}

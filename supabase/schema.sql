@@ -306,10 +306,11 @@ begin
 end;
 $$;
 
--- Operator-only: cancel an order and put its items' quantities back into
--- stock. Idempotent (cancelling an already-cancelled order is a no-op).
+-- Operator-only: cancel an order, put its items' quantities back into
+-- stock, and delete the order entirely (no cancelled-but-retained row).
+drop function if exists cancel_order(uuid);
 create or replace function cancel_order(p_order_id uuid)
-returns orders
+returns void
 language plpgsql
 security definer
 set search_path = public
@@ -326,9 +327,6 @@ begin
   if v_order.id is null then
     raise exception 'order not found';
   end if;
-  if v_order.cancelled_at is not null then
-    return v_order;
-  end if;
 
   for v_item in select * from jsonb_array_elements(v_order.items) loop
     update products
@@ -336,8 +334,7 @@ begin
       where id = (v_item->>'productId')::uuid;
   end loop;
 
-  update orders set cancelled_at = now() where id = p_order_id returning * into v_order;
-  return v_order;
+  delete from orders where id = p_order_id;
 end;
 $$;
 
