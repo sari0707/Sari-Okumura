@@ -1474,8 +1474,73 @@ function AdminCreateOrder({ salons, products, adminPlaceOrder, setView }) {
   );
 }
 
-function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
+function AdminOrderEditForm({ order, salon, products, onSave, onCancel }) {
+  const [qtyMap, setQtyMap] = useState(() => {
+    const m = {};
+    (order.items || []).forEach((i) => { m[i.productId] = i.qty; });
+    return m;
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  // Include any product this order already references even if it's since
+  // been discontinued, so the admin doesn't lose visibility of it here.
+  const orderedIds = new Set((order.items || []).map((i) => i.productId));
+  const editableProducts = [
+    ...products.filter((p) => p.active),
+    ...products.filter((p) => !p.active && orderedIds.has(p.id)),
+  ];
+
+  const cart = editableProducts
+    .map((p) => ({ productId: p.id, qty: Number(qtyMap[p.id]) || 0 }))
+    .filter((c) => c.qty > 0);
+  const { items, subtotal, shipping, total } = calcCartTotals(cart, products, salon);
+
+  const submit = async () => {
+    if (items.length === 0) return;
+    setSubmitting(true);
+    await onSave(cart);
+    setSubmitting(false);
+  };
+
+  return (
+    <Card style={{ padding: 16, marginBottom: 12, background: C.sage, border: "none" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 10 }}>注文内容を編集</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        {editableProducts.map((p) => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1, fontSize: 12.5 }}>
+              {p.name}{!p.active && <span style={{ color: C.clay }}>（販売停止中）</span>}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.inkSoft, width: 70, textAlign: "right" }}>{yen(priceFor(p, salon))}</div>
+            <Input
+              type="number"
+              min={0}
+              value={qtyMap[p.id] ?? ""}
+              onChange={(e) => setQtyMap({ ...qtyMap, [p.id]: e.target.value })}
+              style={{ width: 70, textAlign: "right" }}
+              placeholder="0"
+            />
+          </div>
+        ))}
+      </div>
+      <Card style={{ padding: 12, marginBottom: 14, fontSize: 12.5 }}>
+        <Row label="小計" value={yen(subtotal)} />
+        <Row label="送料" value={shipping === 0 ? "無料" : yen(shipping)} />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontWeight: 700 }}>
+          <span>合計</span><span>{yen(total)}</span>
+        </div>
+      </Card>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Btn disabled={submitting || items.length === 0} onClick={submit}>{submitting ? "保存中…" : "保存する"}</Btn>
+        <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
+      </div>
+    </Card>
+  );
+}
+
+function AdminOrders({ orders, salons, products, updateOrder, cancelOrder, adminEditOrder, setView }) {
   const [filter, setFilter] = useState("all");
+  const [editingId, setEditingId] = useState(null);
   const filtered = [...orders].reverse().filter((o) => filter === "all" || deriveOrderStatus(o) === filter);
 
   const exportToExcel = () => {
@@ -1534,6 +1599,19 @@ function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
                 {o.items.map((i) => `${i.name}×${i.qty}`).join("、")} ／ 合計 {yen(o.total)}
               </div>
 
+              {editingId === o.id && (
+                <AdminOrderEditForm
+                  order={o}
+                  salon={s}
+                  products={products}
+                  onCancel={() => setEditingId(null)}
+                  onSave={async (cart) => {
+                    const { error } = await adminEditOrder(o.id, cart);
+                    if (!error) setEditingId(null);
+                  }}
+                />
+              )}
+
               {o.cancelled ? (
                 <div style={{ fontSize: 12.5, color: C.clay, background: C.claySoft, borderRadius: 4, padding: 12 }}>
                   この注文はキャンセル済みです。在庫は元に戻されています。
@@ -1571,6 +1649,16 @@ function AdminOrders({ orders, salons, updateOrder, cancelOrder, setView }) {
               )}
 
               <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {!o.cancelled && (
+                  <Btn
+                    variant="outline"
+                    icon={Edit3}
+                    onClick={() => setEditingId(editingId === o.id ? null : o.id)}
+                    style={{ padding: "8px 14px", fontSize: 12.5 }}
+                  >
+                    {editingId === o.id ? "編集を閉じる" : "編集する"}
+                  </Btn>
+                )}
                 <Btn variant="outline" icon={Package} onClick={() => setView("admin-delivery-note", o.id)} style={{ padding: "8px 14px", fontSize: 12.5 }}>
                   納品書を発行
                 </Btn>
@@ -2354,6 +2442,31 @@ export default function App() {
     setProducts(mapProducts(productsData));
   };
 
+  // Operator correcting an existing order's items after the fact.
+  const adminEditOrder = async (orderId, cart) => {
+    const order = orders.find((o) => o.id === orderId);
+    const salonForOrder = salons.find((s) => s.id === order?.salonId);
+    const { items, subtotal, shipping, total } = calcCartTotals(cart, products, salonForOrder);
+    const { error } = await supabase.rpc("admin_edit_order", {
+      p_order_id: orderId,
+      p_items: items,
+      p_subtotal: subtotal,
+      p_shipping: shipping,
+      p_total: total,
+    });
+    if (error) {
+      alert("注文の修正に失敗しました：" + error.message);
+      return { error };
+    }
+    const [{ data: ordersData }, { data: productsData }] = await Promise.all([
+      supabase.from("orders").select("*").order("created_at", { ascending: true }),
+      supabase.from("products").select("*").order("sort_order"),
+    ]);
+    setOrders(mapOrders(ordersData));
+    setProducts(mapProducts(productsData));
+    return { error: null };
+  };
+
   const saveBankInfo = async (f) => {
     await supabase
       .from("bank_info")
@@ -2522,7 +2635,7 @@ export default function App() {
         </div>
         {view === "admin-dashboard" && <AdminDashboard salons={salons} orders={orders} products={products} setView={setView} />}
         {view === "admin-salons" && <AdminSalons salons={salons} updateSalon={updateSalon} adminCreateSalon={adminCreateSalon} />}
-        {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} updateOrder={updateOrder} cancelOrder={cancelOrder} setView={setView} />}
+        {view === "admin-orders" && <AdminOrders orders={orders} salons={salons} products={products} updateOrder={updateOrder} cancelOrder={cancelOrder} adminEditOrder={adminEditOrder} setView={setView} />}
         {view === "admin-create-order" && <AdminCreateOrder salons={salons} products={products} adminPlaceOrder={adminPlaceOrder} setView={setView} />}
         {view === "admin-monthly-invoice" && <MonthlyInvoiceScreen salons={salons} orders={orders} bankInfo={bankInfo} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}

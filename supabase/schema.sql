@@ -338,6 +338,63 @@ begin
 end;
 $$;
 
+-- Operator-only: replace an existing order's items/totals, reconciling
+-- stock by first putting back everything the old items reserved, then
+-- decrementing for the new items - so an increased qty, a decreased qty,
+-- a removed item, or an added item are all just "the new list", no diffing
+-- needed. Atomic: an insufficient-stock exception rolls back the restore
+-- too, leaving the order untouched.
+create or replace function admin_edit_order(
+  p_order_id uuid,
+  p_items jsonb,
+  p_subtotal numeric,
+  p_shipping numeric,
+  p_total numeric
+)
+returns orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_old_item jsonb;
+  v_new_item jsonb;
+  v_order orders;
+begin
+  if not is_admin() then
+    raise exception 'only the operator can do this';
+  end if;
+
+  select * into v_order from orders where id = p_order_id;
+  if v_order.id is null then
+    raise exception 'order not found';
+  end if;
+
+  for v_old_item in select * from jsonb_array_elements(v_order.items) loop
+    update products
+      set stock = stock + (v_old_item->>'qty')::int
+      where id = (v_old_item->>'productId')::uuid;
+  end loop;
+
+  for v_new_item in select * from jsonb_array_elements(p_items) loop
+    update products
+      set stock = stock - (v_new_item->>'qty')::int
+      where id = (v_new_item->>'productId')::uuid
+        and stock >= (v_new_item->>'qty')::int;
+    if not found then
+      raise exception 'insufficient stock for product %', v_new_item->>'name';
+    end if;
+  end loop;
+
+  update orders
+    set items = p_items, subtotal = p_subtotal, shipping = p_shipping, total = p_total
+    where id = p_order_id
+    returning * into v_order;
+
+  return v_order;
+end;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- bank_info: single-row settings table for wire-transfer details.
 -- ---------------------------------------------------------------------------
