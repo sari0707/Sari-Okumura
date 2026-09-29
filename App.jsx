@@ -1371,6 +1371,7 @@ function AdminCreateOrder({ salons, products, adminPlaceOrder, setView }) {
   const approvedSalons = salons.filter((s) => s.status === "approved");
   const [salonId, setSalonId] = useState(approvedSalons[0]?.id || "");
   const [qtyMap, setQtyMap] = useState({});
+  const [shippingChoice, setShippingChoice] = useState("auto"); // "auto" | "yes" | "no"
   const [submitting, setSubmitting] = useState(false);
 
   const selectedSalon = salons.find((s) => s.id === salonId) || null;
@@ -1378,15 +1379,19 @@ function AdminCreateOrder({ salons, products, adminPlaceOrder, setView }) {
   const cart = activeProducts
     .map((p) => ({ productId: p.id, qty: Number(qtyMap[p.id]) || 0 }))
     .filter((c) => c.qty > 0);
-  const { items, subtotal, shipping, total } = calcCartTotals(cart, products, selectedSalon);
+  const auto = calcCartTotals(cart, products, selectedSalon);
+  const shippingOverride = shippingChoice === "yes" ? SHIPPING_FEE : shippingChoice === "no" ? 0 : null;
+  const shipping = shippingOverride == null ? auto.shipping : shippingOverride;
+  const total = auto.subtotal + shipping;
 
   const submit = async () => {
-    if (!salonId || items.length === 0) return;
+    if (!salonId || auto.items.length === 0) return;
     setSubmitting(true);
-    const { error } = await adminPlaceOrder(salonId, cart);
+    const { error } = await adminPlaceOrder(salonId, cart, shippingOverride);
     setSubmitting(false);
     if (!error) {
       setQtyMap({});
+      setShippingChoice("auto");
       alert("注文を作成しました。");
       setView("admin-orders");
     }
@@ -1440,15 +1445,29 @@ function AdminCreateOrder({ salons, products, adminPlaceOrder, setView }) {
         {activeProducts.length === 0 && <EmptyState title="販売中の商品がありません" />}
       </div>
 
+      <Card style={{ padding: 18, marginBottom: 18 }}>
+        <Field label="送料" hint={`自動の場合：${auto.shipping === 0 ? "無料" : yen(auto.shipping)}（商品設定・¥${FREE_SHIP_THRESHOLD.toLocaleString()}以上で判定）`}>
+          <select
+            value={shippingChoice}
+            onChange={(e) => setShippingChoice(e.target.value)}
+            style={inputStyle}
+          >
+            <option value="auto">自動（商品設定に従う）</option>
+            <option value="yes">送料あり（{yen(SHIPPING_FEE)}）</option>
+            <option value="no">送料なし</option>
+          </select>
+        </Field>
+      </Card>
+
       <Card style={{ padding: 18, marginBottom: 20 }}>
-        <Row label="小計" value={yen(subtotal)} />
+        <Row label="小計" value={yen(auto.subtotal)} />
         <Row label="送料" value={shipping === 0 ? "無料" : yen(shipping)} />
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8, fontWeight: 700 }}>
           <span>合計</span><span>{yen(total)}</span>
         </div>
       </Card>
 
-      <Btn full disabled={submitting || items.length === 0} onClick={submit}>
+      <Btn full disabled={submitting || auto.items.length === 0} onClick={submit}>
         {submitting ? "作成中…" : "この内容で注文を作成する"}
       </Btn>
     </Screen>
@@ -2375,9 +2394,13 @@ export default function App() {
   };
 
   // Operator entering an order on a salon's behalf (phone/in-person orders).
-  const adminPlaceOrder = async (salonId, adminCart) => {
+  // shippingOverride: null (use the normal per-product/threshold calc), or
+  // an explicit yen amount (0 for "no shipping") the operator chose instead.
+  const adminPlaceOrder = async (salonId, adminCart, shippingOverride = null) => {
     const targetSalon = salons.find((s) => s.id === salonId);
-    const { items, subtotal, shipping, total } = calcCartTotals(adminCart, products, targetSalon);
+    const { items, subtotal, shipping: autoShipping } = calcCartTotals(adminCart, products, targetSalon);
+    const shipping = shippingOverride == null ? autoShipping : shippingOverride;
+    const total = subtotal + shipping;
     const { error } = await supabase.rpc("admin_place_order", {
       p_salon_id: salonId,
       p_order_number: genOrderNumber(),
