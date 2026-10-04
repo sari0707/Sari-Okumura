@@ -10,6 +10,9 @@ import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 import { supabase } from "./src/supabaseClient.js";
 
+import CustomerShop from "./src/CustomerShop.jsx";
+import CustomerOrdersAdmin from "./src/CustomerOrdersAdmin.jsx";
+
 /* ============================================================
    BRAND TOKENS
    forest: #2D4A35 / forest-deep:#1F3527 / gold:#C9A84C
@@ -429,6 +432,7 @@ function AdminNav({ view, setView }) {
     { key: "admin-dashboard", label: "ダッシュボード" },
     { key: "admin-salons", label: "サロン管理" },
     { key: "admin-orders", label: "注文管理" },
+    { key: "admin-customer-orders", label: "一般のお客様の注文" },
     { key: "admin-create-order", label: "注文を作成" },
     { key: "admin-monthly-invoice", label: "月次請求" },
     { key: "admin-products", label: "商品・在庫" },
@@ -567,6 +571,7 @@ function LoginScreen({ goRegister }) {
             </>
           )}
 
+          <div style={{ textAlign: "center", marginTop: 20 }}><a href="#shop" style={{ color: C.forest, fontSize: 14 }}>一般のお客様はこちら（商品購入）</a></div>
           <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 22, paddingTop: 16, textAlign: "center" }}>
             <button
               onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setError(""); }}
@@ -2191,6 +2196,12 @@ function AdminSettings({ bankInfo, onSave }) {
    ROOT APP
 ============================================================ */
 export default function App() {
+  const [customerMode, setCustomerMode] = useState(window.location.hash === "#shop");
+  useEffect(() => {
+    const onHash = () => setCustomerMode(window.location.hash === "#shop");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState("guest"); // guest | salon-unregistered | salon-pending | salon | admin
@@ -2550,6 +2561,8 @@ export default function App() {
     `}</style>
   );
 
+  if (customerMode) return <>{style}<CustomerShop /></>;
+
   if (loading) {
     return (
       <div style={{ minHeight: "100vh", background: C.forest, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2639,6 +2652,7 @@ export default function App() {
         {view === "admin-create-order" && <AdminCreateOrder salons={salons} products={products} adminPlaceOrder={adminPlaceOrder} setView={setView} />}
         {view === "admin-monthly-invoice" && <MonthlyInvoiceScreen salons={salons} orders={orders} bankInfo={bankInfo} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}
+        {view === "admin-customer-orders" && <CustomerOrdersAdmin />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
         {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
         {view === "admin-delivery-note" && <DeliveryNoteScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
