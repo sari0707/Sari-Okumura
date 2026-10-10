@@ -82,7 +82,7 @@ const bankSaved=(await db.query('select * from customer_orders where id=$1',[ban
 assert.equal(Number(bankSaved.total),3900);assert.equal(bankSaved.payment_requested,true);assert.equal(bankSaved.payment_link,'');
 const bank={bank_name:'Test Bank',branch_name:'Main',account_type:'普通',account_number:'1234567',account_holder:'YOMOGI',deadline_days:7};
 assert.equal(paymentMessage(bankSaved,null),'');assert.equal(paymentMessage({...bankSaved,shipping:null},bank),'');
-const bankText=paymentMessage(bankSaved,bank);assert(bankText.includes('Test Bank')&&bankText.includes('1234567')&&bankText.includes('3,900円'));assert(!/square/i.test(bankText));
+const bankText=paymentMessage(bankSaved,bank);assert(bankText.includes('Test Bank')&&bankText.includes('1234567')&&bankText.includes('3,900円'));assert(bankText.includes('振込手数料はお客様のご負担')&&bankText.includes('7日以内')&&bankText.includes('7日以内に商品を発送'));assert(paymentMessage({...bankSaved,payment_method:'card',payment_link:'https://square.link/u/test'},bank).includes('7日以内に商品を発送'));assert(!/square/i.test(bankText));
 await db.exec('set role authenticated');
 await db.query('select cancel_customer_order($1)',[bankOrder.id]);await db.query('select cancel_customer_order($1)',[cardOrder.id]);
 await db.exec('reset role');assert.equal((await db.query('select stock from products where id=$1',[productId])).rows[0].stock,10);
