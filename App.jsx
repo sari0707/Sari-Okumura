@@ -123,6 +123,8 @@ const mapProduct = (r) => ({
   imageUrl: r.image_url || "",
   requiresShipping: r.requires_shipping,
   billingType: r.billing_type,
+  // false = retail-only (shown in the public shop, hidden from wholesale).
+  wholesaleEnabled: r.wholesale_enabled !== false,
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
 
@@ -180,6 +182,7 @@ const productToDb = (patch) => {
   if ("imageUrl" in patch) dbPatch.image_url = patch.imageUrl || null;
   if ("requiresShipping" in patch) dbPatch.requires_shipping = patch.requiresShipping;
   if ("billingType" in patch) dbPatch.billing_type = patch.billingType;
+  if ("wholesaleEnabled" in patch) dbPatch.wholesale_enabled = patch.wholesaleEnabled;
   return dbPatch;
 };
 
@@ -2024,6 +2027,7 @@ function AdminProducts({ products, updateProduct, addProduct, moveProduct }) {
                     卸 {yen(p.wholesalePrice)} ／ パートナー {p.partnerPrice == null ? "卸価格と同じ" : yen(p.partnerPrice)} ／ 一般 {yen(p.generalPrice)} ／ 在庫 {p.stock} ／ 最低{p.minOrderQty}個
                     {p.requiresShipping === false && <span style={{ color: C.gold, fontWeight: 700 }}> ／ 送料対象外</span>}
                     {p.billingType === "monthly" && <span style={{ color: C.forest, fontWeight: 700 }}> ／ 月次請求</span>}
+                    {p.wholesaleEnabled === false && <span style={{ color: C.clay, fontWeight: 700 }}> ／ 一般向けのみ</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -2054,6 +2058,7 @@ function ProductEditForm({ initial, onSave, onCancel }) {
     imageUrl: initial?.imageUrl || "",
     requiresShipping: initial?.requiresShipping ?? true,
     billingType: initial?.billingType || "immediate",
+    wholesaleEnabled: initial?.wholesaleEnabled ?? true,
   });
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -2118,6 +2123,17 @@ function ProductEditForm({ initial, onSave, onCancel }) {
         />
         <span style={{ fontSize: 13, color: C.ink }}>送料の対象にする</span>
       </label>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={f.wholesaleEnabled}
+          onChange={(e) => setF({ ...f, wholesaleEnabled: e.target.checked })}
+        />
+        <span style={{ fontSize: 13, color: C.ink }}>取扱店（卸）にも販売する</span>
+      </label>
+      <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 18 }}>
+        外すと一般のお客様向けショップだけの商品になり、取扱店の画面には表示されず注文もできません。一般向けに出すには「一般販売価格」の入力が必要です。
+      </div>
       <Field label="支払い方法" hint="月次請求にすると、末締め・翌月20日払いの請求書にまとめられます">
         <select
           value={f.billingType}
@@ -2318,7 +2334,7 @@ export default function App() {
       if (cancelled) return;
       setSalon(mapSalon(salonRow));
       setOrders(mapOrders(ordersData));
-      setProducts(mapProducts(productsData));
+      setProducts(mapProducts(productsData).filter((p) => p.wholesaleEnabled));
       setBankInfo(mapBankInfo(bankData));
       setRole("salon");
       setView("top");
@@ -2511,7 +2527,7 @@ export default function App() {
     const newOrder = mapOrder(data);
     setOrders((prev) => [...prev, newOrder]);
     const { data: productsData } = await supabase.from("products").select("*").eq("active", true).order("sort_order");
-    setProducts(mapProducts(productsData));
+    setProducts(mapProducts(productsData).filter((p) => p.wholesaleEnabled));
     setCart([]);
     setLastOrderId(newOrder.id);
     setView("complete");
