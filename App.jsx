@@ -10,6 +10,9 @@ import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 import { supabase } from "./src/supabaseClient.js";
 
+import CustomerShop from "./src/CustomerShop.jsx";
+import CustomerOrdersAdmin from "./src/CustomerOrdersAdmin.jsx";
+
 /* ============================================================
    BRAND TOKENS
    forest: #2D4A35 / forest-deep:#1F3527 / gold:#C9A84C
@@ -120,6 +123,8 @@ const mapProduct = (r) => ({
   imageUrl: r.image_url || "",
   requiresShipping: r.requires_shipping,
   billingType: r.billing_type,
+  // false = retail-only (shown in the public shop, hidden from wholesale).
+  wholesaleEnabled: r.wholesale_enabled !== false,
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
 
@@ -177,6 +182,7 @@ const productToDb = (patch) => {
   if ("imageUrl" in patch) dbPatch.image_url = patch.imageUrl || null;
   if ("requiresShipping" in patch) dbPatch.requires_shipping = patch.requiresShipping;
   if ("billingType" in patch) dbPatch.billing_type = patch.billingType;
+  if ("wholesaleEnabled" in patch) dbPatch.wholesale_enabled = patch.wholesaleEnabled;
   return dbPatch;
 };
 
@@ -429,6 +435,7 @@ function AdminNav({ view, setView }) {
     { key: "admin-dashboard", label: "ダッシュボード" },
     { key: "admin-salons", label: "サロン管理" },
     { key: "admin-orders", label: "注文管理" },
+    { key: "admin-customer-orders", label: "一般のお客様の注文" },
     { key: "admin-create-order", label: "注文を作成" },
     { key: "admin-monthly-invoice", label: "月次請求" },
     { key: "admin-products", label: "商品・在庫" },
@@ -567,6 +574,7 @@ function LoginScreen({ goRegister }) {
             </>
           )}
 
+          <div style={{ textAlign: "center", marginTop: 20 }}><a href="#shop" style={{ color: C.forest, fontSize: 14 }}>一般のお客様はこちら（商品購入）</a></div>
           <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 22, paddingTop: 16, textAlign: "center" }}>
             <button
               onClick={() => { setMode(mode === "salon" ? "admin" : "salon"); setError(""); }}
@@ -770,7 +778,7 @@ function ProductListScreen({ products, cart, setCart, salon, setView }) {
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10.5, color: C.inkSoft, textDecoration: "line-through" }}>{yen(p.generalPrice)}</div>
+                {p.generalPrice > 0 && <div style={{ fontSize: 10.5, color: C.inkSoft, textDecoration: "line-through" }}>{yen(p.generalPrice)}</div>}
                 <div style={{ fontSize: 16, color: C.forest, fontWeight: 700 }}>{yen(priceFor(p, salon))}</div>
                 <div style={{ fontSize: 10, color: C.inkSoft }}>{salon?.partnerAccount ? "パートナー価格" : "卸価格"} / 税込</div>
               </div>
@@ -826,7 +834,7 @@ function ProductDetailScreen({ product, setCart, salon, setView }) {
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 18 }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: C.forest }}>{yen(priceFor(product, salon))}</div>
-        <div style={{ fontSize: 12, color: C.inkSoft, textDecoration: "line-through" }}>一般価格 {yen(product.generalPrice)}</div>
+        {product.generalPrice > 0 && <div style={{ fontSize: 12, color: C.inkSoft, textDecoration: "line-through" }}>一般価格 {yen(product.generalPrice)}</div>}
       </div>
 
       <Card style={{ padding: 16, marginBottom: 20, background: C.sage, border: "none" }}>
@@ -2019,6 +2027,7 @@ function AdminProducts({ products, updateProduct, addProduct, moveProduct }) {
                     卸 {yen(p.wholesalePrice)} ／ パートナー {p.partnerPrice == null ? "卸価格と同じ" : yen(p.partnerPrice)} ／ 一般 {yen(p.generalPrice)} ／ 在庫 {p.stock} ／ 最低{p.minOrderQty}個
                     {p.requiresShipping === false && <span style={{ color: C.gold, fontWeight: 700 }}> ／ 送料対象外</span>}
                     {p.billingType === "monthly" && <span style={{ color: C.forest, fontWeight: 700 }}> ／ 月次請求</span>}
+                    {p.wholesaleEnabled === false && <span style={{ color: C.clay, fontWeight: 700 }}> ／ 一般向けのみ</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -2049,6 +2058,7 @@ function ProductEditForm({ initial, onSave, onCancel }) {
     imageUrl: initial?.imageUrl || "",
     requiresShipping: initial?.requiresShipping ?? true,
     billingType: initial?.billingType || "immediate",
+    wholesaleEnabled: initial?.wholesaleEnabled ?? true,
   });
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -2113,6 +2123,17 @@ function ProductEditForm({ initial, onSave, onCancel }) {
         />
         <span style={{ fontSize: 13, color: C.ink }}>送料の対象にする</span>
       </label>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={f.wholesaleEnabled}
+          onChange={(e) => setF({ ...f, wholesaleEnabled: e.target.checked })}
+        />
+        <span style={{ fontSize: 13, color: C.ink }}>取扱店（卸）にも販売する</span>
+      </label>
+      <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 18 }}>
+        外すと一般のお客様向けショップだけの商品になり、取扱店の画面には表示されず注文もできません。一般向けに出すには「一般販売価格」の入力が必要です。
+      </div>
       <Field label="支払い方法" hint="月次請求にすると、末締め・翌月20日払いの請求書にまとめられます">
         <select
           value={f.billingType}
@@ -2191,6 +2212,12 @@ function AdminSettings({ bankInfo, onSave }) {
    ROOT APP
 ============================================================ */
 export default function App() {
+  const [customerMode, setCustomerMode] = useState(window.location.hash === "#shop");
+  useEffect(() => {
+    const onHash = () => setCustomerMode(window.location.hash === "#shop");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState("guest"); // guest | salon-unregistered | salon-pending | salon | admin
@@ -2307,7 +2334,7 @@ export default function App() {
       if (cancelled) return;
       setSalon(mapSalon(salonRow));
       setOrders(mapOrders(ordersData));
-      setProducts(mapProducts(productsData));
+      setProducts(mapProducts(productsData).filter((p) => p.wholesaleEnabled));
       setBankInfo(mapBankInfo(bankData));
       setRole("salon");
       setView("top");
@@ -2500,7 +2527,7 @@ export default function App() {
     const newOrder = mapOrder(data);
     setOrders((prev) => [...prev, newOrder]);
     const { data: productsData } = await supabase.from("products").select("*").eq("active", true).order("sort_order");
-    setProducts(mapProducts(productsData));
+    setProducts(mapProducts(productsData).filter((p) => p.wholesaleEnabled));
     setCart([]);
     setLastOrderId(newOrder.id);
     setView("complete");
@@ -2549,6 +2576,8 @@ export default function App() {
       ::selection { background: ${C.goldSoft}; }
     `}</style>
   );
+
+  if (customerMode) return <>{style}<CustomerShop /></>;
 
   if (loading) {
     return (
@@ -2639,6 +2668,7 @@ export default function App() {
         {view === "admin-create-order" && <AdminCreateOrder salons={salons} products={products} adminPlaceOrder={adminPlaceOrder} setView={setView} />}
         {view === "admin-monthly-invoice" && <MonthlyInvoiceScreen salons={salons} orders={orders} bankInfo={bankInfo} />}
         {view === "admin-products" && <AdminProducts products={products} updateProduct={updateProduct} addProduct={addProduct} moveProduct={moveProduct} />}
+        {view === "admin-customer-orders" && <CustomerOrdersAdmin />}
         {view === "admin-settings" && <AdminSettings bankInfo={bankInfo} onSave={saveBankInfo} />}
         {view === "admin-receipt" && <ReceiptScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
         {view === "admin-delivery-note" && <DeliveryNoteScreen order={receiptOrder} salon={receiptSalon} bankInfo={bankInfo} setView={setView} />}
