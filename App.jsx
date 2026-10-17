@@ -778,7 +778,7 @@ function ProductListScreen({ products, cart, setCart, salon, setView }) {
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10.5, color: C.inkSoft, textDecoration: "line-through" }}>{yen(p.generalPrice)}</div>
+                {p.generalPrice > 0 && <div style={{ fontSize: 10.5, color: C.inkSoft, textDecoration: "line-through" }}>{yen(p.generalPrice)}</div>}
                 <div style={{ fontSize: 16, color: C.forest, fontWeight: 700 }}>{yen(priceFor(p, salon))}</div>
                 <div style={{ fontSize: 10, color: C.inkSoft }}>{salon?.partnerAccount ? "パートナー価格" : "卸価格"} / 税込</div>
               </div>
@@ -834,7 +834,7 @@ function ProductDetailScreen({ product, setCart, salon, setView }) {
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 18 }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: C.forest }}>{yen(priceFor(product, salon))}</div>
-        <div style={{ fontSize: 12, color: C.inkSoft, textDecoration: "line-through" }}>一般価格 {yen(product.generalPrice)}</div>
+        {product.generalPrice > 0 && <div style={{ fontSize: 12, color: C.inkSoft, textDecoration: "line-through" }}>一般価格 {yen(product.generalPrice)}</div>}
       </div>
 
       <Card style={{ padding: 16, marginBottom: 20, background: C.sage, border: "none" }}>
