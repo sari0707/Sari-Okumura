@@ -13,13 +13,14 @@ create function is_admin() returns boolean language sql stable as $$ select coal
 insert into products values('00000000-0000-4000-8000-000000000001','Bath','300g','Plant bath',3300,1980,1000,10,true,0,null),('00000000-0000-4000-8000-000000000002','Skin','100ml','Skincare',2750,1600,1000,10,true,1,null);`);
 await db.exec(await readFile(new URL('../supabase/migrations/20261004_customer_orders.sql',import.meta.url),'utf8'));
 await db.exec(await readFile(new URL('../supabase/migrations/20261010_customer_payment_method.sql',import.meta.url),'utf8'));
+await db.exec(await readFile(new URL('../supabase/migrations/20261019_product_variants.sql',import.meta.url),'utf8'));
 const customer={name:'Test Customer',email:'buyer@example.test',phone:'09012345678',zip:'5580001',address:'Osaka Sumiyoshi Test 1',notes:''};
 const productId='00000000-0000-4000-8000-000000000001';
 const request=randomUUID();
 const place=(items,amount=6600,id=request,method='card')=>db.query('select place_customer_order($1,$2,$3,$4,$5) as result',[id,JSON.stringify(customer),JSON.stringify(items),amount,method]);
 await db.exec('set role anon');
 const catalogue=(await db.query('select * from customer_products()')).rows;
-assert.equal(Number(catalogue[0].general_price),3300);assert(!('wholesale_price' in catalogue[0]));assert(!('partner_price' in catalogue[0]));
+assert.equal(Number(catalogue[0].general_price),3300);assert(!('wholesale_price' in catalogue[0]));assert(!('partner_price' in catalogue[0]));assert('group_name' in catalogue[0]&&'variant_label' in catalogue[0]);
 await assert.rejects(db.query('select * from products'));
 await assert.rejects(db.query('select * from customer_orders'));
 const first=(await place([{productId,qty:2,unitPrice:1,subtotal:2}])).rows[0].result;

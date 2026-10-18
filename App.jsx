@@ -125,6 +125,9 @@ const mapProduct = (r) => ({
   billingType: r.billing_type,
   // false = retail-only (shown in the public shop, hidden from wholesale).
   wholesaleEnabled: r.wholesale_enabled !== false,
+  // Products sharing a groupName are shown as one menu with a variant picker.
+  groupName: r.group_name || "",
+  variantLabel: r.variant_label || "",
 });
 const mapProducts = (rows) => (rows || []).map(mapProduct);
 
@@ -183,6 +186,8 @@ const productToDb = (patch) => {
   if ("requiresShipping" in patch) dbPatch.requires_shipping = patch.requiresShipping;
   if ("billingType" in patch) dbPatch.billing_type = patch.billingType;
   if ("wholesaleEnabled" in patch) dbPatch.wholesale_enabled = patch.wholesaleEnabled;
+  if ("groupName" in patch) dbPatch.group_name = (patch.groupName || "").trim() || null;
+  if ("variantLabel" in patch) dbPatch.variant_label = (patch.variantLabel || "").trim() || null;
   return dbPatch;
 };
 
@@ -748,6 +753,14 @@ function TopPage({ salon, products, orders, setView }) {
 function ProductListScreen({ products, cart, setCart, salon, setView }) {
   const [qtyMap, setQtyMap] = useState({});
   const activeProducts = products.filter((p) => p.active);
+  // Variants of one menu (same groupName) collapse into a single card.
+  const [picked, setPicked] = useState({});
+  const groups = [];
+  for (const p of activeProducts) {
+    const g = p.groupName && groups.find((x) => x.groupName === p.groupName);
+    if (g) g.variants.push(p);
+    else groups.push({ groupName: p.groupName, variants: [p] });
+  }
 
   const getQty = (p) => qtyMap[p.id] ?? p.minOrderQty;
   const addToCart = (p) => {
@@ -766,12 +779,27 @@ function ProductListScreen({ products, cart, setCart, salon, setView }) {
       <SectionTitle eyebrow="CATALOG" title="商品一覧" />
       {activeProducts.length === 0 && <EmptyState title="現在お取り扱いできる商品がありません" />}
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {activeProducts.map((p) => (
-          <Card key={p.id} style={{ padding: 16 }}>
+        {groups.map((g) => {
+          const p = g.variants.find((v) => v.id === picked[g.groupName]) || g.variants[0];
+          const grouped = g.variants.length > 1;
+          return (
+          <Card key={grouped ? g.groupName : p.id} style={{ padding: 16 }}>
             <div style={{ display: "flex", gap: 14 }} onClick={() => setView("productDetail", p.id)}>
-              <ProductArt size={72} src={p.imageUrl} />
+              <ProductArt size={72} src={p.imageUrl || g.variants.find((v) => v.imageUrl)?.imageUrl} />
               <div style={{ flex: 1, cursor: "pointer" }}>
-                <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 15.5, color: C.ink, marginBottom: 3 }}>{p.name}</div>
+                <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 15.5, color: C.ink, marginBottom: 3 }}>{grouped ? g.groupName : p.name}</div>
+                {grouped && (
+                  <select
+                    value={p.id}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setPicked({ ...picked, [g.groupName]: e.target.value })}
+                    style={{ width: "100%", maxWidth: 220, padding: "7px 8px", margin: "2px 0 6px", border: `1px solid ${C.line}`, borderRadius: 3, fontSize: 13, background: "#fff", color: C.ink }}
+                  >
+                    {g.variants.map((v) => (
+                      <option key={v.id} value={v.id}>{v.variantLabel || v.name}{v.stock <= 0 ? "（在庫切れ）" : ""}</option>
+                    ))}
+                  </select>
+                )}
                 <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 6 }}>{p.volume}</div>
                 <div style={{ fontSize: 11.5, color: p.stock > 0 ? C.forestSoft : C.clay, fontWeight: 600 }}>
                   {p.stock > 0 ? `在庫あり（${p.stock}）` : "在庫切れ"}
@@ -802,13 +830,14 @@ function ProductListScreen({ products, cart, setCart, salon, setView }) {
               </Btn>
             </div>
           </Card>
-        ))}
+          );
+        })}
       </div>
     </Screen>
   );
 }
 
-function ProductDetailScreen({ product, setCart, salon, setView }) {
+function ProductDetailScreen({ product, products, setCart, salon, setView }) {
   const [qty, setQty] = useState(product?.minOrderQty || 1);
   if (!product) return <Screen><EmptyState title="商品が見つかりません" /></Screen>;
 
@@ -829,8 +858,26 @@ function ProductDetailScreen({ product, setCart, salon, setView }) {
       <div style={{ display: "flex", justifyContent: "center", marginBottom: 22 }}>
         <ProductArt size={160} src={product.imageUrl} />
       </div>
-      <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 21, color: C.ink, marginBottom: 4 }}>{product.name}</div>
+      <div style={{ fontFamily: "'Shippori Mincho', serif", fontSize: 21, color: C.ink, marginBottom: 4 }}>{product.groupName || product.name}</div>
       <div style={{ fontSize: 12.5, color: C.inkSoft, marginBottom: 14 }}>{product.volume}</div>
+      {product.groupName && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+          {(products || []).filter((v) => v.active && v.groupName === product.groupName).map((v) => (
+            <button
+              key={v.id}
+              onClick={() => { setQty(v.minOrderQty); setView("productDetail", v.id); }}
+              style={{
+                padding: "8px 14px", borderRadius: 3, fontSize: 13, cursor: "pointer",
+                border: `1px solid ${v.id === product.id ? C.forest : C.line}`,
+                background: v.id === product.id ? C.forest : "#fff",
+                color: v.id === product.id ? "#fff" : v.stock > 0 ? C.ink : C.inkSoft,
+              }}
+            >
+              {v.variantLabel || v.name}{v.stock <= 0 ? "（在庫切れ）" : ""}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 18 }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: C.forest }}>{yen(priceFor(product, salon))}</div>
@@ -2059,6 +2106,8 @@ function ProductEditForm({ initial, onSave, onCancel }) {
     requiresShipping: initial?.requiresShipping ?? true,
     billingType: initial?.billingType || "immediate",
     wholesaleEnabled: initial?.wholesaleEnabled ?? true,
+    groupName: initial?.groupName || "",
+    variantLabel: initial?.variantLabel || "",
   });
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -2104,6 +2153,14 @@ function ProductEditForm({ initial, onSave, onCancel }) {
         </div>
       </Field>
       <Field label="商品名"><Input value={f.name} onChange={set("name")} /></Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="メニュー名（任意）" hint="同じ名前の商品が1つのメニューにまとまります">
+          <Input value={f.groupName} onChange={set("groupName")} placeholder="例：若よもぎ蒸し" />
+        </Field>
+        <Field label="種類名（任意）" hint="メニュー内の選択肢に表示されます">
+          <Input value={f.variantLabel} onChange={set("variantLabel")} placeholder="例：改" />
+        </Field>
+      </div>
       <Field label="内容量"><Input value={f.volume} onChange={set("volume")} /></Field>
       <Field label="商品説明"><TextArea value={f.description} onChange={set("description")} /></Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -2685,7 +2742,7 @@ export default function App() {
       <div style={{ flex: 1 }}>
         {view === "top" && <TopPage salon={salon} products={products} orders={orders} setView={setView} />}
         {view === "products" && <ProductListScreen products={products} cart={cart} setCart={setCart} salon={salon} setView={setView} />}
-        {view === "productDetail" && <ProductDetailScreen product={selectedProduct} setCart={setCart} salon={salon} setView={setView} />}
+        {view === "productDetail" && <ProductDetailScreen product={selectedProduct} products={products} setCart={setCart} salon={salon} setView={setView} />}
         {view === "cart" && <CartScreen cart={cart} setCart={setCart} products={products} salon={salon} setView={setView} />}
         {view === "checkout" && <CheckoutScreen salon={salon} cart={cart} products={products} bankInfo={bankInfo} onConfirm={confirmOrder} setView={setView} />}
         {view === "complete" && <CompleteScreen order={lastOrder} bankInfo={bankInfo} setView={setView} />}
