@@ -2,3 +2,5 @@
 .retailPayMethod{margin:22px 0;padding:18px 20px;border:1px solid #d8d2c0;border-radius:5px;background:#fff}.retailPayMethod legend{padding:0 6px;font-weight:600}.retailPayMethod label{display:flex;align-items:flex-start;gap:10px;padding:10px 0;cursor:pointer}.retailPayMethod input{width:20px;height:20px;margin-top:5px;flex:none;accent-color:#2d4a35}.retailPayMethod label small{display:block;color:#5b6b58;font-size:13px}
 
 .retailLegal{margin:0;max-width:800px}.retailLegal>div{display:grid;grid-template-columns:200px 1fr;gap:16px;padding:16px 0;border-bottom:1px solid #d8d2c0}.retailLegal dt{font-weight:600;font-size:14px}.retailLegal dd{margin:0;font-size:14px;overflow-wrap:anywhere}.retailLegalLink{border:0;background:none;color:#2d4a35;text-decoration:underline;font-size:14px;padding:0}@media(max-width:700px){.retailLegal>div{grid-template-columns:1fr;gap:4px}}
+
+.retail .retailVariant{margin:10px 0 4px;font-size:14px;color:#5b6b58}
