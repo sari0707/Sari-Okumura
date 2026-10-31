@@ -1905,16 +1905,21 @@ function MonthlyInvoiceScreen({ salons, orders, bankInfo }) {
   const [year, month] = yearMonth.split("-").map(Number);
 
   const lineItems = [];
+  let shippingTotal = 0;
   orders.forEach((o) => {
     if (o.salonId !== salonId || o.cancelled || !o.createdAtRaw) return;
     const d = new Date(o.createdAtRaw);
     if (d.getFullYear() !== year || d.getMonth() + 1 !== month) return;
-    (o.items || []).forEach((i) => {
-      if (i.billingType !== "monthly") return;
+    const monthlyItems = (o.items || []).filter((i) => i.billingType === "monthly");
+    if (monthlyItems.length === 0) return;
+    monthlyItems.forEach((i) => {
       lineItems.push({ ...i, orderNumber: o.orderNumber, orderDate: o.createdAt });
     });
+    // Shipping belongs to the order, so include it only once per eligible order.
+    shippingTotal += Number(o.shipping) || 0;
   });
-  const total = lineItems.reduce((s, i) => s + i.subtotal, 0);
+  const productTotal = lineItems.reduce((s, i) => s + Number(i.subtotal || 0), 0);
+  const total = productTotal + shippingTotal;
 
   let dueYear = year, dueMonth = month + 1;
   if (dueMonth > 12) { dueMonth = 1; dueYear += 1; }
@@ -2005,8 +2010,14 @@ function MonthlyInvoiceScreen({ salons, orders, bankInfo }) {
               </table>
             </div>
 
-            <Card style={{ padding: 16, marginBottom: 40, fontSize: 13, fontWeight: 700 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <Card style={{ padding: 16, marginBottom: 40, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span>商品代金合計</span><span>{yen(productTotal)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span>送料合計</span><span>{yen(shippingTotal)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
                 <span>ご請求金額合計</span><span>{yen(total)}</span>
               </div>
             </Card>
